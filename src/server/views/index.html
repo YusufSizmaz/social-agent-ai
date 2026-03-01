@@ -3,232 +3,407 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Social Media Bot - Yonetim Paneli</title>
+  <title>Social Agent AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --bg: #000000;
+      --bg-card: #0a0a0a;
+      --bg-elevated: #111111;
+      --bg-input: #0a0a0a;
+      --border: #1a1a1a;
+      --border-hover: #333333;
+      --text: #ffffff;
+      --text-secondary: #888888;
+      --text-muted: #555555;
+      --accent: #ffffff;
+      --accent-dim: #cccccc;
+      --radius: 10px;
+      --radius-lg: 14px;
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-    h1 { font-size: 1.8rem; margin-bottom: 8px; color: #38bdf8; }
-    h2 { font-size: 1.2rem; margin-bottom: 16px; color: #94a3b8; }
-    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; -webkit-font-smoothing: antialiased; }
 
-    /* Tabs */
-    .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #334155; padding-bottom: 0; }
-    .tab { padding: 10px 20px; border-radius: 8px 8px 0 0; background: transparent; border: 1px solid transparent; border-bottom: none; cursor: pointer; color: #94a3b8; font-size: 0.9rem; font-weight: 500; transition: all .15s; }
-    .tab:hover { color: #e2e8f0; background: #1e293b; }
-    .tab.active { background: #1e293b; color: #38bdf8; border-color: #334155; border-bottom-color: #1e293b; margin-bottom: -1px; }
-    .tab-content { display: none; }
-    .tab-content.active { display: block; }
+    /* Layout */
+    .app { display: flex; min-height: 100vh; }
+    .sidebar { width: 220px; background: var(--bg-card); border-right: 1px solid var(--border); padding: 24px 0; display: flex; flex-direction: column; position: fixed; top: 0; bottom: 0; z-index: 50; }
+    .main { margin-left: 220px; flex: 1; padding: 32px 40px; min-height: 100vh; }
 
-    /* Cards */
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 32px; }
-    .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
-    .stat-card .value { font-size: 2rem; font-weight: 700; color: #38bdf8; }
-    .stat-card .label { font-size: 0.85rem; color: #94a3b8; margin-top: 4px; }
+    /* Sidebar */
+    .logo { padding: 0 24px 28px; }
+    .logo h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.3px; color: var(--text); }
+    .logo span { font-size: 0.7rem; color: var(--text-muted); font-weight: 400; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 2px; display: block; }
+    .nav { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 0 12px; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; cursor: pointer; color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; transition: all .12s; border: none; background: none; width: 100%; text-align: left; }
+    .nav-item:hover { color: var(--text); background: var(--bg-elevated); }
+    .nav-item.active { color: var(--text); background: var(--bg-elevated); }
+    .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .nav-badge { margin-left: auto; background: var(--bg-elevated); color: var(--text-secondary); font-size: 0.7rem; padding: 2px 7px; border-radius: 10px; font-weight: 600; }
+    .nav-item.active .nav-badge { background: var(--border-hover); color: var(--text); }
+    .sidebar-footer { padding: 16px 24px; border-top: 1px solid var(--border); }
+    .sidebar-footer p { font-size: 0.65rem; color: var(--text-muted); letter-spacing: 0.3px; }
 
-    .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
-    .project-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; cursor: pointer; transition: border-color .15s; }
-    .project-card:hover { border-color: #38bdf8; }
-    .project-card h3 { color: #f1f5f9; margin-bottom: 8px; font-size: 1.1rem; }
-    .project-card p { color: #94a3b8; font-size: 0.85rem; margin-bottom: 12px; }
-    .project-meta { display: flex; gap: 16px; font-size: 0.8rem; color: #64748b; }
+    /* Page Header */
+    .page-header { margin-bottom: 28px; display: flex; align-items: center; justify-content: space-between; }
+    .page-header h2 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.3px; }
+    .page-header p { color: var(--text-secondary); font-size: 0.85rem; margin-top: 2px; }
+
+    /* Stat Cards */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 28px; }
+    .stat-card { background: var(--bg-card); border-radius: var(--radius); padding: 20px; border: 1px solid var(--border); transition: border-color .15s; }
+    .stat-card:hover { border-color: var(--border-hover); }
+    .stat-card .value { font-size: 1.8rem; font-weight: 700; color: var(--text); line-height: 1; }
+    .stat-card .label { font-size: 0.75rem; color: var(--text-secondary); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
+
+    /* Dashboard Sections */
+    .dash-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 28px; }
+    .dash-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+    .dash-section-full { grid-column: 1 / -1; }
+    .dash-section-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .dash-section-header h3 { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+    .dash-section-header .hint { font-size: 0.75rem; color: var(--text-muted); }
+    .dash-section-body { padding: 16px 20px; }
+
+    /* Quick Stats Row */
+    .quick-stats { display: flex; gap: 24px; padding: 16px 20px; }
+    .quick-stat { flex: 1; }
+    .quick-stat .qs-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 4px; font-weight: 500; }
+    .quick-stat .qs-value { font-size: 1.1rem; font-weight: 700; }
+
+    /* Platform Breakdown */
+    .platform-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .platform-row:last-child { border-bottom: none; }
+    .platform-row .pr-name { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500; }
+    .platform-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot-twitter { background: #1d9bf0; }
+    .dot-instagram { background: #e040fb; }
+    .dot-youtube { background: #ff0000; }
+    .dot-tiktok { background: #00f2ea; }
+    .platform-row .pr-count { font-size: 0.85rem; color: var(--text-secondary); font-weight: 600; }
+
+    /* Activity Item */
+    .activity-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .activity-item:last-child { border-bottom: none; }
+    .activity-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+    .activity-dot-published { background: #4ade80; }
+    .activity-dot-pending { background: #facc15; }
+    .activity-dot-failed { background: #f87171; }
+    .activity-dot-review { background: #818cf8; }
+    .activity-dot-generating { background: #22d3ee; }
+    .activity-dot-scheduled { background: #c084fc; }
+    .activity-dot-publishing { background: #fb923c; }
+    .activity-text { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; flex: 1; }
+    .activity-text strong { color: var(--text); font-weight: 600; }
+    .activity-time { font-size: 0.7rem; color: var(--text-muted); white-space: nowrap; margin-top: 2px; }
+
+    /* Project Cards */
+    .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+    .project-card { background: var(--bg-card); border-radius: var(--radius-lg); padding: 20px; border: 1px solid var(--border); transition: border-color .15s; }
+    .project-card:hover { border-color: var(--border-hover); }
+    .project-card h3 { color: var(--text); margin-bottom: 6px; font-size: 1rem; font-weight: 600; }
+    .project-card p { color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 14px; line-height: 1.4; }
+    .project-meta { display: flex; gap: 16px; font-size: 0.75rem; color: var(--text-muted); }
     .project-meta span { display: flex; align-items: center; gap: 4px; }
-    .project-platforms { display: flex; gap: 4px; margin-top: 8px; }
-    .project-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .project-platforms { display: flex; gap: 4px; margin-top: 10px; }
+    .project-actions { display: flex; gap: 6px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 
     /* Table */
-    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; }
-    th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #334155; }
-    th { background: #0f172a; color: #94a3b8; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; }
-    td { font-size: 0.9rem; }
-    .table-wrapper { border-radius: 12px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    .table-wrapper { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+    th, td { padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: var(--bg-elevated); color: var(--text-muted); font-weight: 600; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { font-size: 0.85rem; color: var(--text-secondary); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg-elevated); }
 
     /* Badges */
-    .badge { padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; display: inline-block; }
-    .badge-published { background: #065f46; color: #6ee7b7; }
-    .badge-pending { background: #713f12; color: #fcd34d; }
-    .badge-failed { background: #7f1d1d; color: #fca5a5; }
-    .badge-review { background: #312e81; color: #a5b4fc; }
-    .badge-generating { background: #1e3a5f; color: #7dd3fc; }
-    .badge-scheduled { background: #3b0764; color: #d8b4fe; }
-    .badge-publishing { background: #164e63; color: #67e8f9; }
-    .badge-twitter { background: #0c4a6e; color: #7dd3fc; }
-    .badge-instagram { background: #581c87; color: #d8b4fe; }
-    .badge-youtube { background: #7f1d1d; color: #fca5a5; }
-    .badge-tiktok { background: #064e3b; color: #6ee7b7; }
-    .badge-active { background: #065f46; color: #6ee7b7; }
-    .badge-inactive { background: #374151; color: #9ca3af; }
+    .badge { padding: 3px 8px; border-radius: 5px; font-size: 0.7rem; font-weight: 600; display: inline-block; letter-spacing: 0.2px; }
+    .badge-published { background: #0a1a0a; color: #4ade80; border: 1px solid #14532d; }
+    .badge-pending { background: #1a1a0a; color: #facc15; border: 1px solid #422006; }
+    .badge-failed { background: #1a0a0a; color: #f87171; border: 1px solid #450a0a; }
+    .badge-review { background: #0f0a1a; color: #a78bfa; border: 1px solid #1e1b4b; }
+    .badge-generating { background: #0a1a1a; color: #22d3ee; border: 1px solid #083344; }
+    .badge-scheduled { background: #1a0a1a; color: #c084fc; border: 1px solid #3b0764; }
+    .badge-publishing { background: #1a0f0a; color: #fb923c; border: 1px solid #431407; }
+    .badge-twitter { background: #0a1420; color: #60a5fa; border: 1px solid #1e3a5f; }
+    .badge-instagram { background: #1a0a20; color: #e879f9; border: 1px solid #4a044e; }
+    .badge-youtube { background: #1a0a0a; color: #f87171; border: 1px solid #450a0a; }
+    .badge-tiktok { background: #0a1a15; color: #2dd4bf; border: 1px solid #042f2e; }
+    .badge-active { background: #0a1a0a; color: #4ade80; border: 1px solid #14532d; }
+    .badge-inactive { background: #111111; color: #555555; border: 1px solid #222222; }
 
     /* Buttons */
-    .btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.85rem; font-weight: 500; transition: all .15s; display: inline-flex; align-items: center; gap: 6px; }
-    .btn-primary { background: #38bdf8; color: #0f172a; }
-    .btn-primary:hover { background: #0ea5e9; }
-    .btn-secondary { background: #334155; color: #e2e8f0; }
-    .btn-secondary:hover { background: #475569; }
-    .btn-danger { background: #7f1d1d; color: #fca5a5; }
-    .btn-danger:hover { background: #991b1b; }
-    .btn-sm { padding: 4px 10px; font-size: 0.8rem; }
-    .btn-success { background: #065f46; color: #6ee7b7; }
-    .btn-success:hover { background: #047857; }
+    .btn { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; font-size: 0.8rem; font-weight: 500; transition: all .12s; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
+    .btn-primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+    .btn-primary:hover { background: var(--accent-dim); }
+    .btn-secondary { background: transparent; color: var(--text-secondary); border-color: var(--border); }
+    .btn-secondary:hover { background: var(--bg-elevated); color: var(--text); border-color: var(--border-hover); }
+    .btn-danger { background: transparent; color: #f87171; border-color: #2a0a0a; }
+    .btn-danger:hover { background: #1a0a0a; border-color: #450a0a; }
+    .btn-sm { padding: 5px 10px; font-size: 0.75rem; }
+    .btn-ghost { background: transparent; border-color: transparent; color: var(--text-secondary); padding: 6px 10px; }
+    .btn-ghost:hover { color: var(--text); background: var(--bg-elevated); }
 
     /* Toolbar */
-    .toolbar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
-    .toolbar select { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; }
+    .toolbar { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+    .toolbar select { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-secondary); padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; font-family: inherit; }
+    .toolbar select:focus { outline: none; border-color: var(--border-hover); color: var(--text); }
 
     /* Modal */
-    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: flex-start; padding-top: 60px; }
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; justify-content: center; align-items: flex-start; padding-top: 50px; backdrop-filter: blur(4px); }
     .modal-overlay.show { display: flex; }
-    .modal { background: #1e293b; border-radius: 16px; border: 1px solid #334155; width: 90%; max-width: 560px; max-height: 80vh; overflow-y: auto; }
-    .modal-header { padding: 20px 24px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
-    .modal-header h3 { font-size: 1.1rem; color: #f1f5f9; }
-    .modal-close { background: none; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; line-height: 1; }
-    .modal-close:hover { color: #e2e8f0; }
+    .modal { background: var(--bg-elevated); border-radius: var(--radius-lg); border: 1px solid var(--border); width: 90%; max-width: 520px; max-height: 82vh; overflow-y: auto; }
+    .modal-header { padding: 20px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .modal-header h3 { font-size: 1rem; font-weight: 600; }
+    .modal-close { background: none; border: none; color: var(--text-muted); font-size: 1.3rem; cursor: pointer; line-height: 1; padding: 4px; border-radius: 6px; transition: all .12s; }
+    .modal-close:hover { color: var(--text); background: var(--bg-card); }
     .modal-body { padding: 24px; }
-    .modal-footer { padding: 16px 24px; border-top: 1px solid #334155; display: flex; justify-content: flex-end; gap: 8px; }
+    .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
 
     /* Forms */
     .form-group { margin-bottom: 16px; }
-    .form-group label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px; font-weight: 500; }
+    .form-group label { display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 6px; font-weight: 500; }
     .form-group input, .form-group select, .form-group textarea {
-      width: 100%; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px;
-      color: #e2e8f0; font-size: 0.9rem; font-family: inherit;
+      width: 100%; padding: 10px 12px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font-size: 0.85rem; font-family: inherit; transition: border-color .12s;
     }
-    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #38bdf8; }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: var(--border-hover); }
     .form-group textarea { min-height: 80px; resize: vertical; }
-    .checkbox-group { display: flex; gap: 12px; flex-wrap: wrap; }
-    .checkbox-group label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: #e2e8f0; font-size: 0.9rem; }
-    .checkbox-group input[type="checkbox"] { width: auto; accent-color: #38bdf8; }
+    .checkbox-group { display: flex; gap: 14px; flex-wrap: wrap; }
+    .checkbox-group label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-secondary); font-size: 0.85rem; }
+    .checkbox-group label:hover { color: var(--text); }
+    .checkbox-group input[type="checkbox"] { width: auto; accent-color: var(--text); }
     .toggle-row { display: flex; align-items: center; justify-content: space-between; }
-    .toggle { position: relative; width: 44px; height: 24px; }
+    .toggle { position: relative; width: 40px; height: 22px; }
     .toggle input { opacity: 0; width: 0; height: 0; }
-    .toggle-slider { position: absolute; inset: 0; background: #334155; border-radius: 12px; cursor: pointer; transition: .2s; }
-    .toggle-slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #94a3b8; border-radius: 50%; transition: .2s; }
-    .toggle input:checked + .toggle-slider { background: #38bdf8; }
-    .toggle input:checked + .toggle-slider::before { transform: translateX(20px); background: #0f172a; }
+    .toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 11px; cursor: pointer; transition: .2s; }
+    .toggle-slider::before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: var(--text-muted); border-radius: 50%; transition: .2s; }
+    .toggle input:checked + .toggle-slider { background: var(--text); }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--bg); }
 
     /* Toast */
     .toast-container { position: fixed; top: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
-    .toast { padding: 12px 20px; border-radius: 8px; font-size: 0.85rem; font-weight: 500; animation: slideIn .2s ease; min-width: 250px; }
-    .toast-success { background: #065f46; color: #6ee7b7; border: 1px solid #047857; }
-    .toast-error { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
+    .toast { padding: 12px 20px; border-radius: 8px; font-size: 0.8rem; font-weight: 500; animation: slideIn .2s ease; min-width: 240px; border: 1px solid; }
+    .toast-success { background: #0a1a0a; color: #4ade80; border-color: #14532d; }
+    .toast-error { background: #1a0a0a; color: #f87171; border-color: #450a0a; }
     @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
     /* Preview */
-    .preview-box { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-top: 12px; white-space: pre-wrap; font-size: 0.9rem; line-height: 1.6; }
-    .preview-hashtags { color: #38bdf8; margin-top: 8px; }
+    .preview-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-top: 12px; white-space: pre-wrap; font-size: 0.85rem; line-height: 1.6; color: var(--text-secondary); }
+    .preview-hashtags { color: #60a5fa; margin-top: 8px; font-size: 0.85rem; }
 
-    .loading { text-align: center; padding: 40px; color: #64748b; }
-    .empty { text-align: center; padding: 40px; color: #64748b; font-style: italic; }
-    .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid #334155; border-top: 2px solid #38bdf8; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    .loading { text-align: center; padding: 40px; color: var(--text-muted); font-size: 0.85rem; }
+    .empty { text-align: center; padding: 40px; color: var(--text-muted); font-size: 0.85rem; }
+    .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top: 2px solid var(--text); border-radius: 50%; animation: spin 0.6s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+      .main { margin-left: 0; padding: 20px 16px; }
+      .dash-grid { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>Social Media Bot</h1>
-    </div>
+  <div class="app">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="logo">
+        <h1>Social Agent AI</h1>
+        <span>Otomasyon Paneli</span>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-tab="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Genel Bakis
+        </button>
+        <button class="nav-item" data-tab="projects">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 012-2h4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+          Projeler
+          <span class="nav-badge" id="nav-projects-count">0</span>
+        </button>
+        <button class="nav-item" data-tab="accounts">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+          Hesaplar
+          <span class="nav-badge" id="nav-accounts-count">0</span>
+        </button>
+        <button class="nav-item" data-tab="posts">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          Postlar
+          <span class="nav-badge" id="nav-posts-count">0</span>
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <p onclick="window.location.href='https://codynlab.dev/'" style="color: var(--text-secondary); font-size: 0.8rem; cursor: pointer;">CodynLab Dev.</p>
+      </div>
+    </aside>
 
-    <div class="tabs">
-      <div class="tab active" data-tab="projects">Projeler</div>
-      <div class="tab" data-tab="accounts">Hesaplar</div>
-      <div class="tab" data-tab="posts">Postlar</div>
-      <div class="tab" data-tab="dashboard">Dashboard</div>
-    </div>
+    <!-- MAIN CONTENT -->
+    <main class="main">
 
-    <!-- PROJELER TAB -->
-    <div class="tab-content active" id="tab-projects">
-      <div class="toolbar">
-        <button class="btn btn-primary" onclick="openProjectModal()">+ Yeni Proje</button>
-      </div>
-      <div class="project-grid" id="projects-grid">
-        <div class="loading">Yukleniyor...</div>
-      </div>
-    </div>
+      <!-- DASHBOARD TAB -->
+      <div class="tab-content active" id="tab-dashboard">
+        <div class="page-header">
+          <div>
+            <h2>Genel Bakış</h2>
+            <p>İstatistikler ve aktiviteler</p>
+          </div>
+          <select id="dashboard-project-filter" onchange="loadDashboard()" class="toolbar-select" style="background:var(--bg-card);border:1px solid var(--border);color:var(--text-secondary);padding:8px 12px;border-radius:8px;font-size:0.8rem;font-family:inherit;">
+            <option value="">Tüm Projeler</option>
+          </select>
+        </div>
 
-    <!-- HESAPLAR TAB -->
-    <div class="tab-content" id="tab-accounts">
-      <div class="toolbar">
-        <select id="accounts-project-filter" onchange="loadAccounts()">
-          <option value="">Tum Projeler</option>
-        </select>
-        <button class="btn btn-primary" onclick="openAccountModal()">+ Yeni Hesap</button>
-      </div>
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr><th>Platform</th><th>Kullanici</th><th>Rol</th><th>Proje</th><th>Durum</th><th>Islemler</th></tr>
-          </thead>
-          <tbody id="accounts-table">
-            <tr><td colspan="6" class="loading">Yukleniyor...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+        <div class="stats-grid" id="stats">
+          <div class="stat-card">
+            <div class="value" id="stat-total">-</div>
+            <div class="label">Toplam Post</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-published">-</div>
+            <div class="label">Yayınlanan</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-failed">-</div>
+            <div class="label">Başarısız</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-accounts">-</div>
+            <div class="label">Aktif Hesap</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-jobs-pending">-</div>
+            <div class="label">Bekleyen İş</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-jobs-processing">-</div>
+            <div class="label">İşlenen İş</div>
+          </div>
+        </div>
 
-    <!-- POSTLAR TAB -->
-    <div class="tab-content" id="tab-posts">
-      <div class="toolbar">
-        <select id="posts-project-filter" onchange="loadPosts()">
-          <option value="">Tum Projeler</option>
-        </select>
-        <select id="posts-platform-filter" onchange="loadPosts()">
-          <option value="">Tum Platformlar</option>
-          <option value="twitter">Twitter</option>
-          <option value="instagram">Instagram</option>
-          <option value="youtube">YouTube</option>
-          <option value="tiktok">TikTok</option>
-        </select>
-        <select id="posts-status-filter" onchange="loadPosts()">
-          <option value="">Tum Durumlar</option>
-          <option value="pending">Bekliyor</option>
-          <option value="generating">Uretiliyor</option>
-          <option value="review">Inceleme</option>
-          <option value="scheduled">Zamanlanmis</option>
-          <option value="published">Yayinlandi</option>
-          <option value="failed">Basarisiz</option>
-        </select>
-        <button class="btn btn-success" onclick="openGenerateModal()">Icerik Uret</button>
-      </div>
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr><th>Platform</th><th>Icerik</th><th>Tur</th><th>Durum</th><th>Tarih</th><th>Islemler</th></tr>
-          </thead>
-          <tbody id="posts-table">
-            <tr><td colspan="6" class="loading">Yukleniyor...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+        <div class="dash-grid">
+          <!-- Platform Dagilimi -->
+          <div class="dash-section">
+            <div class="dash-section-header">
+              <h3>Platform Dağılımı</h3>
+              <span class="hint">Post sayılarına göre</span>
+            </div>
+            <div class="dash-section-body" id="platform-breakdown">
+              <div class="loading">Yükleniyor...</div>
+            </div>
+          </div>
 
-    <!-- DASHBOARD TAB -->
-    <div class="tab-content" id="tab-dashboard">
-      <div class="toolbar">
-        <select id="dashboard-project-filter" onchange="loadDashboard()">
-          <option value="">Tum Projeler</option>
-        </select>
+          <!-- Proje Ozeti -->
+          <div class="dash-section">
+            <div class="dash-section-header">
+              <h3>Projeler</h3>
+              <span class="hint" id="dash-project-count">0 proje</span>
+            </div>
+            <div class="dash-section-body" id="project-summary">
+              <div class="loading">Yükleniyor...</div>
+            </div>
+          </div>
+
+          <!-- Son Aktiviteler -->
+          <div class="dash-section dash-section-full">
+            <div class="dash-section-header">
+              <h3>Son Aktiviteler</h3>
+              <span class="hint">Son 20 içerik</span>
+            </div>
+            <div class="dash-section-body" id="recent-activity">
+              <div class="loading">Yükleniyor...</div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="stats-grid" id="stats">
-        <div class="stat-card"><div class="value" id="stat-total">-</div><div class="label">Toplam Post</div></div>
-        <div class="stat-card"><div class="value" id="stat-published">-</div><div class="label">Yayinlanan</div></div>
-        <div class="stat-card"><div class="value" id="stat-failed">-</div><div class="label">Basarisiz</div></div>
-        <div class="stat-card"><div class="value" id="stat-accounts">-</div><div class="label">Aktif Hesap</div></div>
-        <div class="stat-card"><div class="value" id="stat-jobs-pending">-</div><div class="label">Bekleyen Is</div></div>
-        <div class="stat-card"><div class="value" id="stat-jobs-processing">-</div><div class="label">Islenen Is</div></div>
+
+      <!-- PROJELER TAB -->
+      <div class="tab-content" id="tab-projects">
+        <div class="page-header">
+          <div>
+            <h2>Projeler</h2>
+            <p>Proje ve otomasyon ayarları</p>
+          </div>
+          <button class="btn btn-primary" onclick="openProjectModal()">+ Yeni Proje</button>
+        </div>
+        <div class="project-grid" id="projects-grid">
+          <div class="loading">Yükleniyor...</div>
+        </div>
       </div>
-      <h2>Son Postlar</h2>
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr><th>Platform</th><th>Icerik</th><th>Durum</th><th>Tarih</th></tr>
-          </thead>
-          <tbody id="dashboard-posts-table">
-            <tr><td colspan="4" class="loading">Yukleniyor...</td></tr>
-          </tbody>
-        </table>
+
+      <!-- HESAPLAR TAB -->
+      <div class="tab-content" id="tab-accounts">
+        <div class="page-header">
+          <div>
+            <h2>Hesaplar</h2>
+            <p>Sosyal medya hesap yönetimi</p>
+          </div>
+          <button class="btn btn-primary" onclick="openAccountModal()">+ Yeni Hesap</button>
+        </div>
+        <div class="toolbar">
+          <select id="accounts-project-filter" onchange="loadAccounts()">
+            <option value="">Tüm Projeler</option>
+          </select>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr><th>Platform</th><th>Kullanıcı</th><th>Rol</th><th>Proje</th><th>Durum</th><th>İşlemler</th></tr>
+            </thead>
+            <tbody id="accounts-table">
+              <tr><td colspan="6" class="loading">Yükleniyor...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+
+      <!-- POSTLAR TAB -->
+      <div class="tab-content" id="tab-posts">
+        <div class="page-header">
+          <div>
+            <h2>Postlar</h2>
+            <p>İçerik yönetimi ve üretimi</p>
+          </div>
+          <button class="btn btn-primary" onclick="openGenerateModal()">İçerik Üret</button>
+        </div>
+        <div class="toolbar">
+          <select id="posts-project-filter" onchange="loadPosts()">
+            <option value="">Tum Projeler</option>
+          </select>
+          <select id="posts-platform-filter" onchange="loadPosts()">
+            <option value="">Tum Platformlar</option>
+            <option value="twitter">Twitter</option>
+            <option value="instagram">Instagram</option>
+            <option value="youtube">YouTube</option>
+            <option value="tiktok">TikTok</option>
+          </select>
+          <select id="posts-status-filter" onchange="loadPosts()">
+            <option value="">Tum Durumlar</option>
+            <option value="pending">Bekliyor</option>
+            <option value="generating">Uretiliyor</option>
+            <option value="review">Inceleme</option>
+            <option value="scheduled">Zamanlanmis</option>
+            <option value="published">Yayinlandi</option>
+            <option value="failed">Basarisiz</option>
+          </select>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr><th>Platform</th><th>İçerik</th><th>Tür</th><th>Durum</th><th>Tarih</th><th>İşlemler</th></tr>
+            </thead>
+            <tbody id="posts-table">
+              <tr><td colspan="6" class="loading">Yükleniyor...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </main>
   </div>
 
   <!-- MODAL -->
@@ -257,18 +432,18 @@
       el.className = `toast toast-${type}`;
       el.textContent = msg;
       document.getElementById('toast-container').appendChild(el);
-      setTimeout(() => el.remove(), 3000);
+      setTimeout(() => el.remove(), 3500);
     }
 
-    // ── Tabs ──
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    // ── Navigation ──
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-        const loader = { projects: loadProjects, accounts: loadAccounts, posts: loadPosts, dashboard: loadDashboard };
-        loader[tab.dataset.tab]?.();
+        item.classList.add('active');
+        document.getElementById('tab-' + item.dataset.tab).classList.add('active');
+        const loader = { dashboard: loadDashboard, projects: loadProjects, accounts: loadAccounts, posts: loadPosts };
+        loader[item.dataset.tab]?.();
       });
     });
 
@@ -298,6 +473,85 @@
       return data;
     }
 
+    // ── Dashboard ──
+    async function loadDashboard() {
+      try {
+        const pid = document.getElementById('dashboard-project-filter').value;
+        const qs = pid ? `?projectId=${pid}` : '';
+        const [stats, posts, allAccounts] = await Promise.all([
+          api(`/api/dashboard/stats${qs}`),
+          api(`/api/dashboard/recent-posts${qs}`),
+          api(`/api/accounts${qs ? '?projectId=' + pid : ''}`),
+        ]);
+
+        // Stats
+        document.getElementById('stat-total').textContent = stats.posts?.total ?? 0;
+        document.getElementById('stat-published').textContent = stats.posts?.published ?? 0;
+        document.getElementById('stat-failed').textContent = stats.posts?.failed ?? 0;
+        document.getElementById('stat-accounts').textContent = stats.activeAccounts ?? 0;
+        document.getElementById('stat-jobs-pending').textContent = stats.jobs?.pending ?? 0;
+        document.getElementById('stat-jobs-processing').textContent = stats.jobs?.processing ?? 0;
+
+        // Platform breakdown
+        const platCounts = {};
+        posts.forEach(p => { platCounts[p.platform] = (platCounts[p.platform] || 0) + 1; });
+        const platEl = document.getElementById('platform-breakdown');
+        const platNames = { twitter: 'Twitter', instagram: 'Instagram', youtube: 'YouTube', tiktok: 'TikTok' };
+        if (Object.keys(platCounts).length === 0) {
+          platEl.innerHTML = '<div class="empty" style="padding:20px">Henuz veri yok</div>';
+        } else {
+          platEl.innerHTML = Object.entries(platCounts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([pl, count]) => `
+              <div class="platform-row">
+                <div class="pr-name"><span class="platform-dot dot-${pl}"></span>${platNames[pl] || pl}</div>
+                <div class="pr-count">${count}</div>
+              </div>`).join('');
+        }
+
+        // Project summary
+        const projEl = document.getElementById('project-summary');
+        document.getElementById('dash-project-count').textContent = projects.length + ' proje';
+        if (projects.length === 0) {
+          projEl.innerHTML = '<div class="empty" style="padding:20px">Henuz proje yok</div>';
+        } else {
+          projEl.innerHTML = projects.slice(0, 5).map(p => `
+            <div class="platform-row">
+              <div class="pr-name">${esc(p.name)}</div>
+              <div class="pr-count">${p.postCount || 0} post</div>
+            </div>`).join('');
+        }
+
+        // Recent activity
+        const actEl = document.getElementById('recent-activity');
+        if (posts.length === 0) {
+          actEl.innerHTML = '<div class="empty" style="padding:20px">Henuz aktivite yok</div>';
+        } else {
+          actEl.innerHTML = posts.slice(0, 10).map(p => {
+            const statusText = { published: 'yayinlandi', pending: 'bekliyor', failed: 'basarisiz oldu', review: 'inceleme bekliyor', generating: 'uretiliyor', scheduled: 'zamanlandi', publishing: 'yayinlaniyor' };
+            const time = timeAgo(new Date(p.createdAt));
+            return `
+              <div class="activity-item">
+                <span class="activity-dot activity-dot-${p.status}"></span>
+                <div class="activity-text">
+                  <strong>${p.platform}</strong> icerigi ${statusText[p.status] || p.status}
+                  <br>${esc((p.text || '').substring(0, 60))}${(p.text||'').length > 60 ? '...' : ''}
+                </div>
+                <span class="activity-time">${time}</span>
+              </div>`;
+          }).join('');
+        }
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    function timeAgo(date) {
+      const s = Math.floor((Date.now() - date.getTime()) / 1000);
+      if (s < 60) return 'az once';
+      if (s < 3600) return Math.floor(s / 60) + ' dk once';
+      if (s < 86400) return Math.floor(s / 3600) + ' saat once';
+      return Math.floor(s / 86400) + ' gun once';
+    }
+
     // ── Projects ──
     async function loadProjects() {
       try {
@@ -306,6 +560,7 @@
         projects.forEach(p => projectsMap[p.id] = p.name);
         populateProjectDropdowns();
         renderProjects();
+        document.getElementById('nav-projects-count').textContent = projects.length;
       } catch (err) { toast(err.message, 'error'); }
     }
 
@@ -454,6 +709,7 @@
         const pid = document.getElementById('accounts-project-filter').value;
         const url = pid ? `/api/accounts?projectId=${pid}` : '/api/accounts';
         const accounts = await api(url);
+        document.getElementById('nav-accounts-count').textContent = accounts.length;
         const tbody = document.getElementById('accounts-table');
         if (accounts.length === 0) {
           tbody.innerHTML = '<tr><td colspan="6" class="empty">Hesap bulunamadi</td></tr>';
@@ -462,12 +718,12 @@
         tbody.innerHTML = accounts.map(a => `
           <tr>
             <td><span class="badge badge-${a.platform}">${a.platform}</span></td>
-            <td>${esc(a.username)}</td>
+            <td style="color:var(--text);font-weight:500">${esc(a.username)}</td>
             <td>${a.role}</td>
             <td>${projectsMap[a.projectId] || '-'}</td>
             <td><span class="badge badge-${a.active?'active':'inactive'}">${a.active?'Aktif':'Pasif'}</span></td>
             <td>
-              <button class="btn btn-secondary btn-sm" onclick="openAccountModal('${a.id}', ${JSON.stringify(a).replace(/"/g,'&quot;')})">Duzenle</button>
+              <button class="btn btn-ghost btn-sm" onclick="openAccountModal('${a.id}', ${JSON.stringify(a).replace(/"/g,'&quot;')})">Duzenle</button>
               <button class="btn btn-danger btn-sm" onclick="deleteAccount('${a.id}')">Sil</button>
             </td>
           </tr>`).join('');
@@ -573,6 +829,7 @@
         if (plat) params.set('platform', plat);
         if (stat) params.set('status', stat);
         const posts = await api(`/api/posts?${params}`);
+        document.getElementById('nav-posts-count').textContent = posts.length;
         const tbody = document.getElementById('posts-table');
         if (posts.length === 0) {
           tbody.innerHTML = '<tr><td colspan="6" class="empty">Post bulunamadi</td></tr>';
@@ -581,10 +838,10 @@
         tbody.innerHTML = posts.map(p => `
           <tr>
             <td><span class="badge badge-${p.platform}">${p.platform}</span></td>
-            <td>${esc((p.text || '').substring(0, 80))}${(p.text||'').length > 80 ? '...' : ''}</td>
-            <td>${p.contentType}</td>
+            <td style="color:var(--text-secondary);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((p.text || '').substring(0, 80))}</td>
+            <td style="color:var(--text-muted)">${p.contentType}</td>
             <td><span class="badge badge-${p.status}">${p.status}</span></td>
-            <td>${new Date(p.createdAt).toLocaleDateString('tr-TR')}</td>
+            <td style="color:var(--text-muted)">${new Date(p.createdAt).toLocaleDateString('tr-TR')}</td>
             <td>
               <button class="btn btn-danger btn-sm" onclick="deletePost('${p.id}')">Sil</button>
             </td>
@@ -641,13 +898,13 @@
           <textarea id="gf-prompt" rows="4" placeholder="Icerik uretim prompt'u yazin..."></textarea>
         </div>
         <div id="gf-preview" style="display:none">
-          <h2 style="margin-top:16px">Onizleme</h2>
+          <div style="margin-top:16px;margin-bottom:8px;font-size:0.8rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">Onizleme</div>
           <div class="preview-box" id="gf-preview-text"></div>
           <div class="preview-hashtags" id="gf-preview-hashtags"></div>
         </div>`;
       const footer = `
         <button class="btn btn-secondary" onclick="closeModal()">Iptal</button>
-        <button class="btn btn-success" id="gf-submit" onclick="generateContent()">Uret</button>`;
+        <button class="btn btn-primary" id="gf-submit" onclick="generateContent()">Uret</button>`;
       openModal('Icerik Uret', body, footer);
       onGenerateProjectChange();
     }
@@ -660,10 +917,7 @@
         if (cfg.defaultTone) document.getElementById('gf-tone').value = cfg.defaultTone;
         if (cfg.defaultContentType) document.getElementById('gf-contentType').value = cfg.defaultContentType;
         if (cfg.promptTemplate) document.getElementById('gf-prompt').value = cfg.promptTemplate;
-        if (cfg.platforms?.length) {
-          const platSel = document.getElementById('gf-platform');
-          platSel.value = cfg.platforms[0];
-        }
+        if (cfg.platforms?.length) document.getElementById('gf-platform').value = cfg.platforms[0];
       } catch {}
     }
 
@@ -703,38 +957,6 @@
       }
     }
 
-    // ── Dashboard ──
-    async function loadDashboard() {
-      try {
-        const pid = document.getElementById('dashboard-project-filter').value;
-        const qs = pid ? `?projectId=${pid}` : '';
-        const [stats, posts] = await Promise.all([
-          api(`/api/dashboard/stats${qs}`),
-          api(`/api/dashboard/recent-posts${qs}`),
-        ]);
-
-        document.getElementById('stat-total').textContent = stats.posts?.total ?? 0;
-        document.getElementById('stat-published').textContent = stats.posts?.published ?? 0;
-        document.getElementById('stat-failed').textContent = stats.posts?.failed ?? 0;
-        document.getElementById('stat-accounts').textContent = stats.activeAccounts ?? 0;
-        document.getElementById('stat-jobs-pending').textContent = stats.jobs?.pending ?? 0;
-        document.getElementById('stat-jobs-processing').textContent = stats.jobs?.processing ?? 0;
-
-        const tbody = document.getElementById('dashboard-posts-table');
-        if (posts.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="4" class="empty">Henuz post yok</td></tr>';
-          return;
-        }
-        tbody.innerHTML = posts.map(p => `
-          <tr>
-            <td><span class="badge badge-${p.platform}">${p.platform}</span></td>
-            <td>${esc((p.text || '').substring(0, 80))}${(p.text||'').length > 80 ? '...' : ''}</td>
-            <td><span class="badge badge-${p.status}">${p.status}</span></td>
-            <td>${new Date(p.createdAt).toLocaleDateString('tr-TR')}</td>
-          </tr>`).join('');
-      } catch (err) { toast(err.message, 'error'); }
-    }
-
     // ── Helpers ──
     function esc(s) {
       const d = document.createElement('div');
@@ -743,7 +965,12 @@
     }
 
     // ── Init ──
-    loadProjects();
+    async function init() {
+      await loadProjects();
+      loadDashboard();
+    }
+    init();
+    setInterval(loadDashboard, 30000);
   </script>
 </body>
 </html>

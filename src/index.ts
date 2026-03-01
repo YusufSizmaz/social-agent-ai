@@ -14,13 +14,13 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
+  startServer();
+
   try {
     await engine.start();
-    startServer();
-    logger.info('Social Media Bot is running ');
+    logger.info('Social Media Bot is running');
   } catch (err) {
-    logger.error('Failed to start', { error: err instanceof Error ? err.message : String(err) });
-    process.exit(1);
+    logger.error('Engine start failed, web panel is still available', { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
