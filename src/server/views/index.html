@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Social Media Bot - Yonetim Paneli</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 1.8rem; margin-bottom: 8px; color: #38bdf8; }
+    h2 { font-size: 1.2rem; margin-bottom: 16px; color: #94a3b8; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #334155; padding-bottom: 0; }
+    .tab { padding: 10px 20px; border-radius: 8px 8px 0 0; background: transparent; border: 1px solid transparent; border-bottom: none; cursor: pointer; color: #94a3b8; font-size: 0.9rem; font-weight: 500; transition: all .15s; }
+    .tab:hover { color: #e2e8f0; background: #1e293b; }
+    .tab.active { background: #1e293b; color: #38bdf8; border-color: #334155; border-bottom-color: #1e293b; margin-bottom: -1px; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Cards */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+    .stat-card .value { font-size: 2rem; font-weight: 700; color: #38bdf8; }
+    .stat-card .label { font-size: 0.85rem; color: #94a3b8; margin-top: 4px; }
+
+    .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+    .project-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; cursor: pointer; transition: border-color .15s; }
+    .project-card:hover { border-color: #38bdf8; }
+    .project-card h3 { color: #f1f5f9; margin-bottom: 8px; font-size: 1.1rem; }
+    .project-card p { color: #94a3b8; font-size: 0.85rem; margin-bottom: 12px; }
+    .project-meta { display: flex; gap: 16px; font-size: 0.8rem; color: #64748b; }
+    .project-meta span { display: flex; align-items: center; gap: 4px; }
+    .project-platforms { display: flex; gap: 4px; margin-top: 8px; }
+    .project-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; }
+    th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #334155; }
+    th { background: #0f172a; color: #94a3b8; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; }
+    td { font-size: 0.9rem; }
+    .table-wrapper { border-radius: 12px; overflow: hidden; }
+
+    /* Badges */
+    .badge { padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; display: inline-block; }
+    .badge-published { background: #065f46; color: #6ee7b7; }
+    .badge-pending { background: #713f12; color: #fcd34d; }
+    .badge-failed { background: #7f1d1d; color: #fca5a5; }
+    .badge-review { background: #312e81; color: #a5b4fc; }
+    .badge-generating { background: #1e3a5f; color: #7dd3fc; }
+    .badge-scheduled { background: #3b0764; color: #d8b4fe; }
+    .badge-publishing { background: #164e63; color: #67e8f9; }
+    .badge-twitter { background: #0c4a6e; color: #7dd3fc; }
+    .badge-instagram { background: #581c87; color: #d8b4fe; }
+    .badge-youtube { background: #7f1d1d; color: #fca5a5; }
+    .badge-tiktok { background: #064e3b; color: #6ee7b7; }
+    .badge-active { background: #065f46; color: #6ee7b7; }
+    .badge-inactive { background: #374151; color: #9ca3af; }
+
+    /* Buttons */
+    .btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.85rem; font-weight: 500; transition: all .15s; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-primary { background: #38bdf8; color: #0f172a; }
+    .btn-primary:hover { background: #0ea5e9; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-secondary:hover { background: #475569; }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; }
+    .btn-danger:hover { background: #991b1b; }
+    .btn-sm { padding: 4px 10px; font-size: 0.8rem; }
+    .btn-success { background: #065f46; color: #6ee7b7; }
+    .btn-success:hover { background: #047857; }
+
+    /* Toolbar */
+    .toolbar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+    .toolbar select { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; }
+
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: flex-start; padding-top: 60px; }
+    .modal-overlay.show { display: flex; }
+    .modal { background: #1e293b; border-radius: 16px; border: 1px solid #334155; width: 90%; max-width: 560px; max-height: 80vh; overflow-y: auto; }
+    .modal-header { padding: 20px 24px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+    .modal-header h3 { font-size: 1.1rem; color: #f1f5f9; }
+    .modal-close { background: none; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; line-height: 1; }
+    .modal-close:hover { color: #e2e8f0; }
+    .modal-body { padding: 24px; }
+    .modal-footer { padding: 16px 24px; border-top: 1px solid #334155; display: flex; justify-content: flex-end; gap: 8px; }
+
+    /* Forms */
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px; font-weight: 500; }
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+      color: #e2e8f0; font-size: 0.9rem; font-family: inherit;
+    }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #38bdf8; }
+    .form-group textarea { min-height: 80px; resize: vertical; }
+    .checkbox-group { display: flex; gap: 12px; flex-wrap: wrap; }
+    .checkbox-group label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: #e2e8f0; font-size: 0.9rem; }
+    .checkbox-group input[type="checkbox"] { width: auto; accent-color: #38bdf8; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+    .toggle { position: relative; width: 44px; height: 24px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; inset: 0; background: #334155; border-radius: 12px; cursor: pointer; transition: .2s; }
+    .toggle-slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #94a3b8; border-radius: 50%; transition: .2s; }
+    .toggle input:checked + .toggle-slider { background: #38bdf8; }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(20px); background: #0f172a; }
+
+    /* Toast */
+    .toast-container { position: fixed; top: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+    .toast { padding: 12px 20px; border-radius: 8px; font-size: 0.85rem; font-weight: 500; animation: slideIn .2s ease; min-width: 250px; }
+    .toast-success { background: #065f46; color: #6ee7b7; border: 1px solid #047857; }
+    .toast-error { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    /* Preview */
+    .preview-box { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-top: 12px; white-space: pre-wrap; font-size: 0.9rem; line-height: 1.6; }
+    .preview-hashtags { color: #38bdf8; margin-top: 8px; }
+
+    .loading { text-align: center; padding: 40px; color: #64748b; }
+    .empty { text-align: center; padding: 40px; color: #64748b; font-style: italic; }
+    .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid #334155; border-top: 2px solid #38bdf8; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Social Media Bot</h1>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="projects">Projeler</div>
+      <div class="tab" data-tab="accounts">Hesaplar</div>
+      <div class="tab" data-tab="posts">Postlar</div>
+      <div class="tab" data-tab="dashboard">Dashboard</div>
+    </div>
+
+    <!-- PROJELER TAB -->
+    <div class="tab-content active" id="tab-projects">
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="openProjectModal()">+ Yeni Proje</button>
+      </div>
+      <div class="project-grid" id="projects-grid">
+        <div class="loading">Yukleniyor...</div>
+      </div>
+    </div>
+
+    <!-- HESAPLAR TAB -->
+    <div class="tab-content" id="tab-accounts">
+      <div class="toolbar">
+        <select id="accounts-project-filter" onchange="loadAccounts()">
+          <option value="">Tum Projeler</option>
+        </select>
+        <button class="btn btn-primary" onclick="openAccountModal()">+ Yeni Hesap</button>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr><th>Platform</th><th>Kullanici</th><th>Rol</th><th>Proje</th><th>Durum</th><th>Islemler</th></tr>
+          </thead>
+          <tbody id="accounts-table">
+            <tr><td colspan="6" class="loading">Yukleniyor...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- POSTLAR TAB -->
+    <div class="tab-content" id="tab-posts">
+      <div class="toolbar">
+        <select id="posts-project-filter" onchange="loadPosts()">
+          <option value="">Tum Projeler</option>
+        </select>
+        <select id="posts-platform-filter" onchange="loadPosts()">
+          <option value="">Tum Platformlar</option>
+          <option value="twitter">Twitter</option>
+          <option value="instagram">Instagram</option>
+          <option value="youtube">YouTube</option>
+          <option value="tiktok">TikTok</option>
+        </select>
+        <select id="posts-status-filter" onchange="loadPosts()">
+          <option value="">Tum Durumlar</option>
+          <option value="pending">Bekliyor</option>
+          <option value="generating">Uretiliyor</option>
+          <option value="review">Inceleme</option>
+          <option value="scheduled">Zamanlanmis</option>
+          <option value="published">Yayinlandi</option>
+          <option value="failed">Basarisiz</option>
+        </select>
+        <button class="btn btn-success" onclick="openGenerateModal()">Icerik Uret</button>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr><th>Platform</th><th>Icerik</th><th>Tur</th><th>Durum</th><th>Tarih</th><th>Islemler</th></tr>
+          </thead>
+          <tbody id="posts-table">
+            <tr><td colspan="6" class="loading">Yukleniyor...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- DASHBOARD TAB -->
+    <div class="tab-content" id="tab-dashboard">
+      <div class="toolbar">
+        <select id="dashboard-project-filter" onchange="loadDashboard()">
+          <option value="">Tum Projeler</option>
+        </select>
+      </div>
+      <div class="stats-grid" id="stats">
+        <div class="stat-card"><div class="value" id="stat-total">-</div><div class="label">Toplam Post</div></div>
+        <div class="stat-card"><div class="value" id="stat-published">-</div><div class="label">Yayinlanan</div></div>
+        <div class="stat-card"><div class="value" id="stat-failed">-</div><div class="label">Basarisiz</div></div>
+        <div class="stat-card"><div class="value" id="stat-accounts">-</div><div class="label">Aktif Hesap</div></div>
+        <div class="stat-card"><div class="value" id="stat-jobs-pending">-</div><div class="label">Bekleyen Is</div></div>
+        <div class="stat-card"><div class="value" id="stat-jobs-processing">-</div><div class="label">Islenen Is</div></div>
+      </div>
+      <h2>Son Postlar</h2>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr><th>Platform</th><th>Icerik</th><th>Durum</th><th>Tarih</th></tr>
+          </thead>
+          <tbody id="dashboard-posts-table">
+            <tr><td colspan="4" class="loading">Yukleniyor...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Baslik</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer"></div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script>
+    // ── State ──
+    let projects = [];
+    let projectsMap = {};
+
+    // ── Toast ──
+    function toast(msg, type = 'success') {
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.textContent = msg;
+      document.getElementById('toast-container').appendChild(el);
+      setTimeout(() => el.remove(), 3000);
+    }
+
+    // ── Tabs ──
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+        const loader = { projects: loadProjects, accounts: loadAccounts, posts: loadPosts, dashboard: loadDashboard };
+        loader[tab.dataset.tab]?.();
+      });
+    });
+
+    // ── Modal ──
+    function openModal(title, bodyHtml, footerHtml) {
+      document.getElementById('modal-title').textContent = title;
+      document.getElementById('modal-body').innerHTML = bodyHtml;
+      document.getElementById('modal-footer').innerHTML = footerHtml;
+      document.getElementById('modal-overlay').classList.add('show');
+    }
+    function closeModal() {
+      document.getElementById('modal-overlay').classList.remove('show');
+    }
+    document.getElementById('modal-overlay').addEventListener('click', e => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+
+    // ── API Helper ──
+    async function api(url, opts = {}) {
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts,
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Bir hata olustu');
+      return data;
+    }
+
+    // ── Projects ──
+    async function loadProjects() {
+      try {
+        projects = await api('/api/projects');
+        projectsMap = {};
+        projects.forEach(p => projectsMap[p.id] = p.name);
+        populateProjectDropdowns();
+        renderProjects();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    function populateProjectDropdowns() {
+      ['accounts-project-filter', 'posts-project-filter', 'dashboard-project-filter'].forEach(id => {
+        const sel = document.getElementById(id);
+        const val = sel.value;
+        sel.innerHTML = '<option value="">Tum Projeler</option>' +
+          projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+        sel.value = val;
+      });
+    }
+
+    function renderProjects() {
+      const grid = document.getElementById('projects-grid');
+      if (projects.length === 0) {
+        grid.innerHTML = '<div class="empty">Henuz proje yok. Yeni bir proje olusturun.</div>';
+        return;
+      }
+      grid.innerHTML = projects.map(p => {
+        const cfg = p.config || {};
+        const platforms = (cfg.platforms || []).map(pl => `<span class="badge badge-${pl}">${pl}</span>`).join('');
+        return `
+          <div class="project-card">
+            <h3>${esc(p.name)}</h3>
+            <p>${esc(p.description || 'Aciklama yok')}</p>
+            <div class="project-meta">
+              <span>${p.accountCount} hesap</span>
+              <span>${p.postCount} post</span>
+              <span>${p.active ? 'Aktif' : 'Pasif'}</span>
+            </div>
+            <div class="project-platforms">${platforms}</div>
+            <div class="project-actions">
+              <button class="btn btn-secondary btn-sm" onclick="openProjectModal('${p.id}')">Duzenle</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteProject('${p.id}')">Sil</button>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    function openProjectModal(id) {
+      const p = id ? projects.find(x => x.id === id) : null;
+      const cfg = p?.config || {};
+      const body = `
+        <div class="form-group">
+          <label>Proje Adi</label>
+          <input id="pf-name" value="${esc(p?.name || '')}" placeholder="Proje adi">
+        </div>
+        <div class="form-group">
+          <label>Aciklama</label>
+          <textarea id="pf-desc" placeholder="Proje aciklamasi">${esc(p?.description || '')}</textarea>
+        </div>
+        <div class="form-group">
+          <label>Platformlar</label>
+          <div class="checkbox-group">
+            ${['twitter','instagram','youtube','tiktok'].map(pl =>
+              `<label><input type="checkbox" name="pf-platform" value="${pl}" ${(cfg.platforms||[]).includes(pl)?'checked':''}> ${pl}</label>`
+            ).join('')}
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Varsayilan Ton</label>
+          <select id="pf-tone">
+            ${['emotional','informative','urgent','hopeful','friendly'].map(t =>
+              `<option value="${t}" ${cfg.defaultTone===t?'selected':''}>${t}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Varsayilan Icerik Turu</label>
+          <select id="pf-contentType">
+            ${['text','image','video','story','reel','short'].map(t =>
+              `<option value="${t}" ${cfg.defaultContentType===t?'selected':''}>${t}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Prompt Sablonu</label>
+          <textarea id="pf-prompt" placeholder="Gemini icin prompt sablonu...">${esc(cfg.promptTemplate || '')}</textarea>
+        </div>
+        <div class="form-group">
+          <label>Zamanlama (cron)</label>
+          <input id="pf-schedule" value="${esc(cfg.scheduleExpression || '')}" placeholder="*/30 * * * *">
+        </div>
+        <div class="form-group">
+          <div class="toggle-row">
+            <label>Otomatik Yayinla</label>
+            <label class="toggle"><input type="checkbox" id="pf-autoPublish" ${cfg.autoPublish?'checked':''}><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="form-group">
+          <div class="toggle-row">
+            <label>Aktif</label>
+            <label class="toggle"><input type="checkbox" id="pf-active" ${p ? (p.active?'checked':'') : 'checked'}><span class="toggle-slider"></span></label>
+          </div>
+        </div>`;
+      const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Iptal</button>
+        <button class="btn btn-primary" onclick="saveProject('${id||''}')">${id?'Guncelle':'Olustur'}</button>`;
+      openModal(id ? 'Projeyi Duzenle' : 'Yeni Proje', body, footer);
+    }
+
+    async function saveProject(id) {
+      try {
+        const name = document.getElementById('pf-name').value.trim();
+        if (!name) { toast('Proje adi zorunlu', 'error'); return; }
+        const platforms = [...document.querySelectorAll('[name=pf-platform]:checked')].map(c => c.value);
+        const config = {
+          defaultTone: document.getElementById('pf-tone').value,
+          defaultContentType: document.getElementById('pf-contentType').value,
+          platforms,
+          promptTemplate: document.getElementById('pf-prompt').value,
+          scheduleExpression: document.getElementById('pf-schedule').value,
+          autoPublish: document.getElementById('pf-autoPublish').checked,
+        };
+        const payload = {
+          name,
+          description: document.getElementById('pf-desc').value,
+          active: document.getElementById('pf-active').checked,
+          config,
+        };
+        if (id) {
+          await api(`/api/projects/${id}`, { method: 'PATCH', body: payload });
+          toast('Proje guncellendi');
+        } else {
+          await api('/api/projects', { method: 'POST', body: payload });
+          toast('Proje olusturuldu');
+        }
+        closeModal();
+        loadProjects();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    async function deleteProject(id) {
+      if (!confirm('Bu projeyi silmek istediginize emin misiniz?')) return;
+      try {
+        await api(`/api/projects/${id}`, { method: 'DELETE' });
+        toast('Proje silindi');
+        loadProjects();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    // ── Accounts ──
+    async function loadAccounts() {
+      try {
+        const pid = document.getElementById('accounts-project-filter').value;
+        const url = pid ? `/api/accounts?projectId=${pid}` : '/api/accounts';
+        const accounts = await api(url);
+        const tbody = document.getElementById('accounts-table');
+        if (accounts.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">Hesap bulunamadi</td></tr>';
+          return;
+        }
+        tbody.innerHTML = accounts.map(a => `
+          <tr>
+            <td><span class="badge badge-${a.platform}">${a.platform}</span></td>
+            <td>${esc(a.username)}</td>
+            <td>${a.role}</td>
+            <td>${projectsMap[a.projectId] || '-'}</td>
+            <td><span class="badge badge-${a.active?'active':'inactive'}">${a.active?'Aktif':'Pasif'}</span></td>
+            <td>
+              <button class="btn btn-secondary btn-sm" onclick="openAccountModal('${a.id}', ${JSON.stringify(a).replace(/"/g,'&quot;')})">Duzenle</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteAccount('${a.id}')">Sil</button>
+            </td>
+          </tr>`).join('');
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    function openAccountModal(id, existing) {
+      const a = existing || {};
+      const body = `
+        <div class="form-group">
+          <label>Proje</label>
+          <select id="af-project">
+            ${projects.map(p => `<option value="${p.id}" ${a.projectId===p.id?'selected':''}>${p.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Platform</label>
+          <select id="af-platform">
+            ${['twitter','instagram','youtube','tiktok'].map(pl =>
+              `<option value="${pl}" ${a.platform===pl?'selected':''}>${pl}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Kullanici Adi</label>
+          <input id="af-username" value="${esc(a.username || '')}" placeholder="@kullanici">
+        </div>
+        <div class="form-group">
+          <label>Rol</label>
+          <select id="af-role">
+            ${['primary','secondary','backup'].map(r =>
+              `<option value="${r}" ${a.role===r?'selected':''}>${r}</option>`
+            ).join('')}
+          </select>
+        </div>
+        ${!id ? `<div class="form-group">
+          <label>Credentials (JSON)</label>
+          <textarea id="af-credentials" placeholder='{"apiKey": "...", "secret": "..."}'>{}</textarea>
+        </div>` : ''}
+        <div class="form-group">
+          <div class="toggle-row">
+            <label>Aktif</label>
+            <label class="toggle"><input type="checkbox" id="af-active" ${a.active !== false ?'checked':''}><span class="toggle-slider"></span></label>
+          </div>
+        </div>`;
+      const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Iptal</button>
+        <button class="btn btn-primary" onclick="saveAccount('${id||''}')">${id?'Guncelle':'Olustur'}</button>`;
+      openModal(id ? 'Hesabi Duzenle' : 'Yeni Hesap', body, footer);
+    }
+
+    async function saveAccount(id) {
+      try {
+        if (id) {
+          await api(`/api/accounts/${id}`, {
+            method: 'PATCH',
+            body: {
+              active: document.getElementById('af-active').checked,
+              role: document.getElementById('af-role').value,
+            },
+          });
+          toast('Hesap guncellendi');
+        } else {
+          const username = document.getElementById('af-username').value.trim();
+          if (!username) { toast('Kullanici adi zorunlu', 'error'); return; }
+          let credentials;
+          try { credentials = JSON.parse(document.getElementById('af-credentials').value); }
+          catch { toast('Credentials JSON gecersiz', 'error'); return; }
+          await api('/api/accounts', {
+            method: 'POST',
+            body: {
+              projectId: document.getElementById('af-project').value,
+              platform: document.getElementById('af-platform').value,
+              username,
+              role: document.getElementById('af-role').value,
+              credentials,
+            },
+          });
+          toast('Hesap olusturuldu');
+        }
+        closeModal();
+        loadAccounts();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    async function deleteAccount(id) {
+      if (!confirm('Bu hesabi silmek istediginize emin misiniz?')) return;
+      try {
+        await api(`/api/accounts/${id}`, { method: 'DELETE' });
+        toast('Hesap silindi');
+        loadAccounts();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    // ── Posts ──
+    async function loadPosts() {
+      try {
+        const params = new URLSearchParams();
+        const pid = document.getElementById('posts-project-filter').value;
+        const plat = document.getElementById('posts-platform-filter').value;
+        const stat = document.getElementById('posts-status-filter').value;
+        if (pid) params.set('projectId', pid);
+        if (plat) params.set('platform', plat);
+        if (stat) params.set('status', stat);
+        const posts = await api(`/api/posts?${params}`);
+        const tbody = document.getElementById('posts-table');
+        if (posts.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">Post bulunamadi</td></tr>';
+          return;
+        }
+        tbody.innerHTML = posts.map(p => `
+          <tr>
+            <td><span class="badge badge-${p.platform}">${p.platform}</span></td>
+            <td>${esc((p.text || '').substring(0, 80))}${(p.text||'').length > 80 ? '...' : ''}</td>
+            <td>${p.contentType}</td>
+            <td><span class="badge badge-${p.status}">${p.status}</span></td>
+            <td>${new Date(p.createdAt).toLocaleDateString('tr-TR')}</td>
+            <td>
+              <button class="btn btn-danger btn-sm" onclick="deletePost('${p.id}')">Sil</button>
+            </td>
+          </tr>`).join('');
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    async function deletePost(id) {
+      if (!confirm('Bu postu silmek istediginize emin misiniz?')) return;
+      try {
+        await api(`/api/posts/${id}`, { method: 'DELETE' });
+        toast('Post silindi');
+        loadPosts();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    // ── Generate Content ──
+    function openGenerateModal() {
+      if (projects.length === 0) { toast('Once bir proje olusturun', 'error'); return; }
+      const body = `
+        <div class="form-group">
+          <label>Proje</label>
+          <select id="gf-project" onchange="onGenerateProjectChange()">
+            ${projects.map(p => `<option value="${p.id}" data-config='${JSON.stringify(p.config||{})}'>${p.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Platform</label>
+          <select id="gf-platform">
+            <option value="twitter">Twitter</option>
+            <option value="instagram">Instagram</option>
+            <option value="youtube">YouTube</option>
+            <option value="tiktok">TikTok</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Ton</label>
+          <select id="gf-tone">
+            ${['emotional','informative','urgent','hopeful','friendly'].map(t =>
+              `<option value="${t}">${t}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Icerik Turu</label>
+          <select id="gf-contentType">
+            ${['text','image','video','story','reel','short'].map(t =>
+              `<option value="${t}">${t}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Prompt</label>
+          <textarea id="gf-prompt" rows="4" placeholder="Icerik uretim prompt'u yazin..."></textarea>
+        </div>
+        <div id="gf-preview" style="display:none">
+          <h2 style="margin-top:16px">Onizleme</h2>
+          <div class="preview-box" id="gf-preview-text"></div>
+          <div class="preview-hashtags" id="gf-preview-hashtags"></div>
+        </div>`;
+      const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Iptal</button>
+        <button class="btn btn-success" id="gf-submit" onclick="generateContent()">Uret</button>`;
+      openModal('Icerik Uret', body, footer);
+      onGenerateProjectChange();
+    }
+
+    function onGenerateProjectChange() {
+      const sel = document.getElementById('gf-project');
+      const opt = sel.options[sel.selectedIndex];
+      try {
+        const cfg = JSON.parse(opt.dataset.config || '{}');
+        if (cfg.defaultTone) document.getElementById('gf-tone').value = cfg.defaultTone;
+        if (cfg.defaultContentType) document.getElementById('gf-contentType').value = cfg.defaultContentType;
+        if (cfg.promptTemplate) document.getElementById('gf-prompt').value = cfg.promptTemplate;
+        if (cfg.platforms?.length) {
+          const platSel = document.getElementById('gf-platform');
+          platSel.value = cfg.platforms[0];
+        }
+      } catch {}
+    }
+
+    async function generateContent() {
+      const btn = document.getElementById('gf-submit');
+      const prompt = document.getElementById('gf-prompt').value.trim();
+      if (!prompt) { toast('Prompt zorunlu', 'error'); return; }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Uretiliyor...';
+
+      try {
+        const result = await api('/api/posts/generate', {
+          method: 'POST',
+          body: {
+            projectId: document.getElementById('gf-project').value,
+            platform: document.getElementById('gf-platform').value,
+            tone: document.getElementById('gf-tone').value,
+            contentType: document.getElementById('gf-contentType').value,
+            prompt,
+          },
+        });
+
+        const preview = document.getElementById('gf-preview');
+        preview.style.display = 'block';
+        document.getElementById('gf-preview-text').textContent = result.generated?.text || result.post?.text || '';
+        const tags = result.generated?.hashtags || [];
+        document.getElementById('gf-preview-hashtags').textContent = tags.map(t => '#' + t).join(' ');
+
+        toast('Icerik uretildi ve inceleme olarak kaydedildi');
+        btn.textContent = 'Tekrar Uret';
+        btn.disabled = false;
+      } catch (err) {
+        toast(err.message, 'error');
+        btn.textContent = 'Uret';
+        btn.disabled = false;
+      }
+    }
+
+    // ── Dashboard ──
+    async function loadDashboard() {
+      try {
+        const pid = document.getElementById('dashboard-project-filter').value;
+        const qs = pid ? `?projectId=${pid}` : '';
+        const [stats, posts] = await Promise.all([
+          api(`/api/dashboard/stats${qs}`),
+          api(`/api/dashboard/recent-posts${qs}`),
+        ]);
+
+        document.getElementById('stat-total').textContent = stats.posts?.total ?? 0;
+        document.getElementById('stat-published').textContent = stats.posts?.published ?? 0;
+        document.getElementById('stat-failed').textContent = stats.posts?.failed ?? 0;
+        document.getElementById('stat-accounts').textContent = stats.activeAccounts ?? 0;
+        document.getElementById('stat-jobs-pending').textContent = stats.jobs?.pending ?? 0;
+        document.getElementById('stat-jobs-processing').textContent = stats.jobs?.processing ?? 0;
+
+        const tbody = document.getElementById('dashboard-posts-table');
+        if (posts.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" class="empty">Henuz post yok</td></tr>';
+          return;
+        }
+        tbody.innerHTML = posts.map(p => `
+          <tr>
+            <td><span class="badge badge-${p.platform}">${p.platform}</span></td>
+            <td>${esc((p.text || '').substring(0, 80))}${(p.text||'').length > 80 ? '...' : ''}</td>
+            <td><span class="badge badge-${p.status}">${p.status}</span></td>
+            <td>${new Date(p.createdAt).toLocaleDateString('tr-TR')}</td>
+          </tr>`).join('');
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    // ── Helpers ──
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+
+    // ── Init ──
+    loadProjects();
+  </script>
+</body>
+</html>
