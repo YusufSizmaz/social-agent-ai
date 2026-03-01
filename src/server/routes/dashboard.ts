@@ -8,46 +8,50 @@ dashboardRouter.get('/stats', async (req, res) => {
   try {
     const { projectId } = req.query as { projectId?: string };
 
-    const [postStats] = await db.execute<{
-      total: number;
-      published: number;
-      failed: number;
-      pending: number;
-    }>(sql`
-      SELECT
-        COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE status = 'published')::int AS published,
-        COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
-        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending
-      FROM posts
-      ${projectId ? sql`WHERE project_id = ${projectId}` : sql``}
-    `);
+    const postConditions = [];
+    if (projectId) {
+      postConditions.push(eq(schema.posts.projectId, projectId));
+    }
+
+    let postQuery = db
+      .select({
+        total: sql<number>`COUNT(*)::int`,
+        published: sql<number>`COUNT(*) FILTER (WHERE ${schema.posts.status} = 'published')::int`,
+        failed: sql<number>`COUNT(*) FILTER (WHERE ${schema.posts.status} = 'failed')::int`,
+        pending: sql<number>`COUNT(*) FILTER (WHERE ${schema.posts.status} = 'pending')::int`,
+      })
+      .from(schema.posts)
+      .$dynamic();
+
+    if (projectId) {
+      postQuery = postQuery.where(eq(schema.posts.projectId, projectId));
+    }
+
+    const [postStats] = await postQuery;
 
     const [jobStats] = await db
       .select({
-        total: sql<number>`COUNT(*)`,
-        processing: sql<number>`COUNT(*) FILTER (WHERE ${schema.jobQueue.status} = 'processing')`,
-        pending: sql<number>`COUNT(*) FILTER (WHERE ${schema.jobQueue.status} = 'pending')`,
-        failed: sql<number>`COUNT(*) FILTER (WHERE ${schema.jobQueue.status} = 'failed')`,
+        total: sql<number>`COUNT(*)::int`,
+        processing: sql<number>`COUNT(*) FILTER (WHERE ${schema.jobQueue.status} = 'processing')::int`,
+        pending: sql<number>`COUNT(*) FILTER (WHERE ${schema.jobQueue.status} = 'pending')::int`,
+        failed: sql<number>`COUNT(*) FILTER (WHERE ${schema.jobQueue.status} = 'failed')::int`,
       })
       .from(schema.jobQueue);
 
-    const accountQuery = db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(schema.accounts)
-      .$dynamic();
-
-    const conditions = [eq(schema.accounts.active, true)];
+    const accountConditions = [eq(schema.accounts.active, true)];
     if (projectId) {
-      conditions.push(eq(schema.accounts.projectId, projectId));
+      accountConditions.push(eq(schema.accounts.projectId, projectId));
     }
 
-    const activeAccounts = await accountQuery.where(and(...conditions));
+    const [activeAccounts] = await db
+      .select({ count: sql<number>`COUNT(*)::int` })
+      .from(schema.accounts)
+      .where(and(...accountConditions));
 
     res.json({
       posts: postStats ?? { total: 0, published: 0, failed: 0, pending: 0 },
-      jobs: jobStats,
-      activeAccounts: activeAccounts[0]?.count ?? 0,
+      jobs: jobStats ?? { total: 0, processing: 0, pending: 0, failed: 0 },
+      activeAccounts: activeAccounts?.count ?? 0,
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });

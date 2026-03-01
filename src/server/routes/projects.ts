@@ -6,40 +6,40 @@ export const projectsRouter = Router();
 
 projectsRouter.get('/', async (_req, res) => {
   try {
-    const projects = await db
-      .select({
-        id: schema.projects.id,
-        name: schema.projects.name,
-        description: schema.projects.description,
-        active: schema.projects.active,
-        config: schema.projects.config,
-        createdAt: schema.projects.createdAt,
-        updatedAt: schema.projects.updatedAt,
-      })
-      .from(schema.projects)
-      .orderBy(sql`${schema.projects.createdAt} DESC`);
+    const projects = await db.execute<{
+      id: string;
+      name: string;
+      description: string | null;
+      active: boolean;
+      config: Record<string, unknown>;
+      created_at: string;
+      updated_at: string;
+      account_count: number;
+      post_count: number;
+    }>(sql`
+      SELECT
+        p.*,
+        COALESCE(a.cnt, 0)::int AS account_count,
+        COALESCE(po.cnt, 0)::int AS post_count
+      FROM projects p
+      LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM accounts GROUP BY project_id) a ON a.project_id = p.id
+      LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM posts GROUP BY project_id) po ON po.project_id = p.id
+      ORDER BY p.created_at DESC
+    `);
 
-    const enriched = await Promise.all(
-      projects.map(async (p) => {
-        const [accountCount] = await db
-          .select({ count: sql<number>`COUNT(*)` })
-          .from(schema.accounts)
-          .where(eq(schema.accounts.projectId, p.id));
+    const result = projects.map(p => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      active: p.active,
+      config: p.config,
+      createdAt: p.created_at,
+      updatedAt: p.updated_at,
+      accountCount: p.account_count,
+      postCount: p.post_count,
+    }));
 
-        const [postCount] = await db
-          .select({ count: sql<number>`COUNT(*)` })
-          .from(schema.posts)
-          .where(eq(schema.posts.projectId, p.id));
-
-        return {
-          ...p,
-          accountCount: accountCount?.count ?? 0,
-          postCount: postCount?.count ?? 0,
-        };
-      }),
-    );
-
-    res.json(enriched);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
   }
@@ -120,6 +120,7 @@ projectsRouter.patch('/:id', async (req, res) => {
 projectsRouter.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const { force } = req.query as { force?: string };
 
     const [accountCount] = await db
       .select({ count: sql<number>`COUNT(*)` })
@@ -131,12 +132,24 @@ projectsRouter.delete('/:id', async (req, res) => {
       .from(schema.posts)
       .where(eq(schema.posts.projectId, id!));
 
-    const total = (accountCount?.count ?? 0) + (postCount?.count ?? 0);
-    if (total > 0) {
+    const totalAccounts = accountCount?.count ?? 0;
+    const totalPosts = postCount?.count ?? 0;
+
+    if ((totalAccounts > 0 || totalPosts > 0) && force !== 'true') {
       res.status(409).json({
-        error: `Bu projeye bagli ${accountCount?.count ?? 0} hesap ve ${postCount?.count ?? 0} post var. Once bunlari silin.`,
+        error: `Bu projeye bagli ${totalAccounts} hesap ve ${totalPosts} post var. Yine de silmek icin onaylayin.`,
+        accountCount: totalAccounts,
+        postCount: totalPosts,
       });
       return;
+    }
+
+    // Cascade: once bagli postlari, sonra hesaplari sil
+    if (totalPosts > 0) {
+      await db.delete(schema.posts).where(eq(schema.posts.projectId, id!));
+    }
+    if (totalAccounts > 0) {
+      await db.delete(schema.accounts).where(eq(schema.accounts.projectId, id!));
     }
 
     const [deleted] = await db
