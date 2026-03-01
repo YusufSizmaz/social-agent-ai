@@ -1,5 +1,20 @@
 import type { ContentType, Platform, Tone, PostStatus } from '../config/constants.js';
 
+export interface AccountStrategy {
+  tone: Tone;
+  contentTypes: ContentType[];
+  promptTemplate: string;
+  cronExpression: string;
+  contentMix: {
+    original: number;
+    repost: number;
+    reply: number;
+  };
+  active: boolean;
+  hashtags?: string[];
+  language?: string;
+}
+
 export interface ContentRequest {
   projectId: string;
   platform: Platform;

@@ -285,12 +285,32 @@
           </div>
         </div>
 
+        <!-- Engagement Summary Cards -->
+        <div class="stats-grid" id="engagement-stats">
+          <div class="stat-card">
+            <div class="value" id="stat-likes">-</div>
+            <div class="label">Toplam Begeni</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-comments">-</div>
+            <div class="label">Toplam Yorum</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-shares">-</div>
+            <div class="label">Toplam Paylasim</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-impressions">-</div>
+            <div class="label">Toplam Gosterim</div>
+          </div>
+        </div>
+
         <div class="dash-grid">
           <!-- Platform Dagilimi -->
           <div class="dash-section">
             <div class="dash-section-header">
               <h3>Platform Dağılımı</h3>
-              <span class="hint">Post sayılarına göre</span>
+              <span class="hint">Son 7 gun — post & engagement</span>
             </div>
             <div class="dash-section-body" id="platform-breakdown">
               <div class="loading">Yükleniyor...</div>
@@ -305,6 +325,24 @@
             </div>
             <div class="dash-section-body" id="project-summary">
               <div class="loading">Yükleniyor...</div>
+            </div>
+          </div>
+
+          <!-- Hesap Performansi -->
+          <div class="dash-section dash-section-full">
+            <div class="dash-section-header">
+              <h3>Hesap Performansi</h3>
+              <span class="hint">Son 7 gun</span>
+            </div>
+            <div class="dash-section-body" style="padding:0">
+              <table>
+                <thead>
+                  <tr><th>Hesap</th><th>Platform</th><th>Post</th><th>Begeni</th><th>Ort. Etkilesim</th><th>Strateji</th><th>Durum</th></tr>
+                </thead>
+                <tbody id="account-perf-table">
+                  <tr><td colspan="7" class="loading">Yukleniyor...</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -352,10 +390,10 @@
         <div class="table-wrapper">
           <table>
             <thead>
-              <tr><th>Platform</th><th>Kullanıcı</th><th>Rol</th><th>Proje</th><th>Durum</th><th>İşlemler</th></tr>
+              <tr><th>Platform</th><th>Kullanıcı</th><th>Rol</th><th>Proje</th><th>Strateji</th><th>Durum</th><th>İşlemler</th></tr>
             </thead>
             <tbody id="accounts-table">
-              <tr><td colspan="6" class="loading">Yükleniyor...</td></tr>
+              <tr><td colspan="7" class="loading">Yükleniyor...</td></tr>
             </tbody>
           </table>
         </div>
@@ -397,7 +435,7 @@
               <tr><th>Platform</th><th>İçerik</th><th>Tür</th><th>Durum</th><th>Tarih</th><th>İşlemler</th></tr>
             </thead>
             <tbody id="posts-table">
-              <tr><td colspan="6" class="loading">Yükleniyor...</td></tr>
+              <tr><td colspan="7" class="loading">Yükleniyor...</td></tr>
             </tbody>
           </table>
         </div>
@@ -478,9 +516,11 @@
       try {
         const pid = document.getElementById('dashboard-project-filter').value;
         const qs = pid ? `?projectId=${pid}` : '';
-        const [stats, posts] = await Promise.all([
+        const [stats, posts, analyticsSummary, accountPerf] = await Promise.all([
           api(`/api/dashboard/stats${qs}`),
           api(`/api/dashboard/recent-posts${qs}`),
+          api('/api/dashboard/analytics-summary'),
+          api('/api/dashboard/account-performance'),
         ]);
 
         // Stats
@@ -491,20 +531,30 @@
         document.getElementById('stat-jobs-pending').textContent = stats.jobs?.pending ?? 0;
         document.getElementById('stat-jobs-processing').textContent = stats.jobs?.processing ?? 0;
 
-        // Platform breakdown
-        const platCounts = {};
-        posts.forEach(p => { platCounts[p.platform] = (platCounts[p.platform] || 0) + 1; });
+        // Engagement stats
+        const fmt = n => Number(n || 0).toLocaleString('tr-TR');
+        document.getElementById('stat-likes').textContent = fmt(analyticsSummary.totals?.totalLikes);
+        document.getElementById('stat-comments').textContent = fmt(analyticsSummary.totals?.totalComments);
+        document.getElementById('stat-shares').textContent = fmt(analyticsSummary.totals?.totalShares);
+        document.getElementById('stat-impressions').textContent = fmt(analyticsSummary.totals?.totalImpressions);
+
+        // Platform breakdown with engagement
         const platEl = document.getElementById('platform-breakdown');
         const platNames = { twitter: 'Twitter', instagram: 'Instagram', youtube: 'YouTube', tiktok: 'TikTok' };
-        if (Object.keys(platCounts).length === 0) {
+        const platData = analyticsSummary.platformBreakdown || [];
+        if (platData.length === 0) {
           platEl.innerHTML = '<div class="empty" style="padding:20px">Henuz veri yok</div>';
         } else {
-          platEl.innerHTML = Object.entries(platCounts)
-            .sort((a, b) => b[1] - a[1])
-            .map(([pl, count]) => `
+          platEl.innerHTML = platData
+            .sort((a, b) => b.postCount - a.postCount)
+            .map(p => `
               <div class="platform-row">
-                <div class="pr-name"><span class="platform-dot dot-${pl}"></span>${platNames[pl] || pl}</div>
-                <div class="pr-count">${count}</div>
+                <div class="pr-name"><span class="platform-dot dot-${p.platform}"></span>${platNames[p.platform] || p.platform}</div>
+                <div class="pr-count" style="display:flex;gap:12px;font-size:0.75rem">
+                  <span>${p.postCount} post</span>
+                  <span>${fmt(p.totalLikes)} begeni</span>
+                  <span>${fmt(p.totalImpressions)} gosterim</span>
+                </div>
               </div>`).join('');
         }
 
@@ -519,6 +569,23 @@
               <div class="pr-name">${esc(p.name)}</div>
               <div class="pr-count">${p.postCount || 0} post</div>
             </div>`).join('');
+        }
+
+        // Account performance table
+        const perfBody = document.getElementById('account-perf-table');
+        if (!accountPerf || accountPerf.length === 0) {
+          perfBody.innerHTML = '<tr><td colspan="7" class="empty">Henuz hesap verisi yok</td></tr>';
+        } else {
+          perfBody.innerHTML = accountPerf.map(a => `
+            <tr>
+              <td><strong>@${esc(a.username)}</strong></td>
+              <td><span class="badge badge-${a.platform}">${a.platform}</span></td>
+              <td>${a.postCount}</td>
+              <td>${fmt(a.totalLikes)}</td>
+              <td>%${a.avgEngagementRate.toFixed(2)}</td>
+              <td><span class="badge ${a.hasStrategy ? 'badge-active' : 'badge-inactive'}">${a.hasStrategy ? 'Aktif' : 'Yok'}</span></td>
+              <td><span class="badge ${a.active ? 'badge-active' : 'badge-inactive'}">${a.active ? 'Aktif' : 'Pasif'}</span></td>
+            </tr>`).join('');
         }
 
         // Recent activity
@@ -542,9 +609,11 @@
         }
       } catch (err) {
         ['stat-total','stat-published','stat-failed','stat-accounts','stat-jobs-pending','stat-jobs-processing'].forEach(id => document.getElementById(id).textContent = '0');
+        ['stat-likes','stat-comments','stat-shares','stat-impressions'].forEach(id => document.getElementById(id).textContent = '0');
         document.getElementById('platform-breakdown').innerHTML = '<div class="empty" style="padding:20px">Veri yuklenemedi</div>';
         document.getElementById('project-summary').innerHTML = '<div class="empty" style="padding:20px">Veri yuklenemedi</div>';
         document.getElementById('recent-activity').innerHTML = '<div class="empty" style="padding:20px">Veri yuklenemedi</div>';
+        document.getElementById('account-perf-table').innerHTML = '<tr><td colspan="7" class="empty">Veri yuklenemedi</td></tr>';
         toast(err.message, 'error');
       }
     }
@@ -732,29 +801,38 @@
         document.getElementById('nav-accounts-count').textContent = accounts.length;
         const tbody = document.getElementById('accounts-table');
         if (accounts.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" class="empty">Hesap bulunamadi</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" class="empty">Hesap bulunamadi</td></tr>';
           return;
         }
-        tbody.innerHTML = accounts.map(a => `
+        tbody.innerHTML = accounts.map(a => {
+          const s = a.strategy;
+          const stratBadge = s?.active
+            ? `<span class="badge badge-active" title="${s.cronExpression}">${s.tone} · ${s.cronExpression}</span>`
+            : '<span class="badge badge-inactive">Yok</span>';
+          return `
           <tr>
             <td><span class="badge badge-${a.platform}">${a.platform}</span></td>
             <td style="color:var(--text);font-weight:500">${esc(a.username)}</td>
             <td>${a.role}</td>
             <td>${projectsMap[a.projectId] || '-'}</td>
+            <td>${stratBadge}</td>
             <td><span class="badge badge-${a.active?'active':'inactive'}">${a.active?'Aktif':'Pasif'}</span></td>
             <td>
               <button class="btn btn-ghost btn-sm" onclick="openAccountModal('${a.id}', ${JSON.stringify(a).replace(/"/g,'&quot;')})">Duzenle</button>
               <button class="btn btn-danger btn-sm" onclick="deleteAccount('${a.id}')">Sil</button>
             </td>
-          </tr>`).join('');
+          </tr>`;
+        }).join('');
       } catch (err) {
-        document.getElementById('accounts-table').innerHTML = '<tr><td colspan="6" class="empty">Hesaplar yuklenemedi</td></tr>';
+        document.getElementById('accounts-table').innerHTML = '<tr><td colspan="7" class="empty">Hesaplar yuklenemedi</td></tr>';
         toast(err.message, 'error');
       }
     }
 
     function openAccountModal(id, existing) {
       const a = existing || {};
+      const s = a.strategy || {};
+      const mix = s.contentMix || { original: 70, repost: 20, reply: 10 };
       const body = `
         <div class="form-group">
           <label>Proje</label>
@@ -791,6 +869,64 @@
             <label>Aktif</label>
             <label class="toggle"><input type="checkbox" id="af-active" ${a.active !== false ?'checked':''}><span class="toggle-slider"></span></label>
           </div>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:20px 0">
+        <h4 style="font-size:0.9rem;margin-bottom:14px;color:var(--text)">Icerik Stratejisi</h4>
+
+        <div class="form-group">
+          <div class="toggle-row">
+            <label>Strateji Aktif</label>
+            <label class="toggle"><input type="checkbox" id="af-strat-active" ${s.active?'checked':''}><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Ton</label>
+          <select id="af-strat-tone">
+            ${['emotional','informative','urgent','hopeful','friendly'].map(t =>
+              `<option value="${t}" ${s.tone===t?'selected':''}>${t}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Icerik Turleri</label>
+          <div class="checkbox-group">
+            ${['text','image','video','story','reel','short'].map(ct =>
+              `<label><input type="checkbox" name="af-strat-ct" value="${ct}" ${(s.contentTypes||['text']).includes(ct)?'checked':''}> ${ct}</label>`
+            ).join('')}
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Prompt Sablonu</label>
+          <textarea id="af-strat-prompt" placeholder="Gemini'ye gonderilecek ana prompt...">${esc(s.promptTemplate || '')}</textarea>
+        </div>
+        <div class="form-group">
+          <label>Zamanlama (Cron)</label>
+          <input id="af-strat-cron" value="${esc(s.cronExpression || '0 */4 * * *')}" placeholder="0 */4 * * *">
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('af-strat-cron').value='0 */4 * * *'">Her 4 saat</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('af-strat-cron').value='0 8,14,20 * * *'">Gunde 3</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('af-strat-cron').value='0 * * * *'">Saatte 1</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Icerik Dagilimi (toplam 100%)</label>
+          <div style="display:flex;gap:10px;align-items:center">
+            <div style="flex:1"><label style="font-size:0.7rem;color:var(--text-muted)">Orijinal %</label><input type="number" id="af-strat-original" value="${mix.original}" min="0" max="100" onchange="balanceMix('original')"></div>
+            <div style="flex:1"><label style="font-size:0.7rem;color:var(--text-muted)">Repost %</label><input type="number" id="af-strat-repost" value="${mix.repost}" min="0" max="100" onchange="balanceMix('repost')"></div>
+            <div style="flex:1"><label style="font-size:0.7rem;color:var(--text-muted)">Yanit %</label><input type="number" id="af-strat-reply" value="${mix.reply}" min="0" max="100" onchange="balanceMix('reply')"></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Sabit Hashtagler (virgülle ayirin)</label>
+          <input id="af-strat-hashtags" value="${esc((s.hashtags||[]).join(', '))}" placeholder="#kedi, #sahiplen">
+        </div>
+        <div class="form-group">
+          <label>Dil</label>
+          <select id="af-strat-lang">
+            <option value="tr" ${(s.language||'tr')==='tr'?'selected':''}>Turkce</option>
+            <option value="en" ${s.language==='en'?'selected':''}>English</option>
+          </select>
         </div>`;
       const footer = `
         <button class="btn btn-secondary" onclick="closeModal()">Iptal</button>
@@ -798,8 +934,43 @@
       openModal(id ? 'Hesabi Duzenle' : 'Yeni Hesap', body, footer);
     }
 
+    function balanceMix(changed) {
+      const o = parseInt(document.getElementById('af-strat-original').value) || 0;
+      const rp = parseInt(document.getElementById('af-strat-repost').value) || 0;
+      const rl = parseInt(document.getElementById('af-strat-reply').value) || 0;
+      const total = o + rp + rl;
+      if (total > 100) {
+        const excess = total - 100;
+        if (changed === 'original') document.getElementById('af-strat-reply').value = Math.max(0, rl - excess);
+        else if (changed === 'repost') document.getElementById('af-strat-reply').value = Math.max(0, rl - excess);
+        else document.getElementById('af-strat-repost').value = Math.max(0, rp - excess);
+      }
+    }
+
+    function getStrategyFromForm() {
+      const active = document.getElementById('af-strat-active')?.checked || false;
+      const contentTypes = [...document.querySelectorAll('input[name="af-strat-ct"]:checked')].map(c => c.value);
+      const hashtagsRaw = (document.getElementById('af-strat-hashtags')?.value || '').trim();
+      const hashtags = hashtagsRaw ? hashtagsRaw.split(',').map(h => h.trim()).filter(Boolean) : [];
+      return {
+        active,
+        tone: document.getElementById('af-strat-tone')?.value || 'friendly',
+        contentTypes: contentTypes.length ? contentTypes : ['text'],
+        promptTemplate: document.getElementById('af-strat-prompt')?.value || '',
+        cronExpression: document.getElementById('af-strat-cron')?.value || '0 */4 * * *',
+        contentMix: {
+          original: parseInt(document.getElementById('af-strat-original')?.value) || 70,
+          repost: parseInt(document.getElementById('af-strat-repost')?.value) || 20,
+          reply: parseInt(document.getElementById('af-strat-reply')?.value) || 10,
+        },
+        hashtags,
+        language: document.getElementById('af-strat-lang')?.value || 'tr',
+      };
+    }
+
     async function saveAccount(id) {
       try {
+        const strategy = getStrategyFromForm();
         if (id) {
           await api(`/api/accounts/${id}`, {
             method: 'PATCH',
@@ -808,6 +979,7 @@
               platform: document.getElementById('af-platform').value,
               role: document.getElementById('af-role').value,
               active: document.getElementById('af-active').checked,
+              strategy,
             },
           });
           toast('Hesap guncellendi');
@@ -825,6 +997,7 @@
               username,
               role: document.getElementById('af-role').value,
               credentials,
+              strategy,
             },
           });
           toast('Hesap olusturuldu');

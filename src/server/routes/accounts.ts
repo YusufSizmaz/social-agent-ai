@@ -15,6 +15,7 @@ accountsRouter.get('/', async (req, res) => {
       role: schema.accounts.role,
       username: schema.accounts.username,
       active: schema.accounts.active,
+      strategy: schema.accounts.strategy,
       lastUsedAt: schema.accounts.lastUsedAt,
       createdAt: schema.accounts.createdAt,
     }).from(schema.accounts).$dynamic();
@@ -32,12 +33,13 @@ accountsRouter.get('/', async (req, res) => {
 
 accountsRouter.post('/', async (req, res) => {
   try {
-    const { projectId, platform, role, username, credentials } = req.body as {
+    const { projectId, platform, role, username, credentials, strategy } = req.body as {
       projectId: string;
       platform: string;
       role?: string;
       username: string;
       credentials: Record<string, string>;
+      strategy?: Record<string, unknown>;
     };
 
     const [account] = await db
@@ -48,6 +50,7 @@ accountsRouter.post('/', async (req, res) => {
         role: (role ?? 'primary') as 'primary' | 'secondary' | 'backup',
         username,
         credentials,
+        ...(strategy ? { strategy: strategy as any } : {}),
       })
       .returning();
 
@@ -66,6 +69,7 @@ accountsRouter.patch('/:id', async (req, res) => {
       username?: string;
       platform?: string;
       credentials?: Record<string, string>;
+      strategy?: Record<string, unknown> | null;
     };
 
     const [updated] = await db
@@ -76,6 +80,7 @@ accountsRouter.patch('/:id', async (req, res) => {
         ...(updates.username ? { username: updates.username } : {}),
         ...(updates.platform ? { platform: updates.platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok' } : {}),
         ...(updates.credentials ? { credentials: updates.credentials } : {}),
+        ...(updates.strategy !== undefined ? { strategy: updates.strategy as any } : {}),
       })
       .where(eq(schema.accounts.id, id!))
       .returning();
