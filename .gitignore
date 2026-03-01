@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+.wwebjs_auth/
+.wwebjs_cache/
+temp/
