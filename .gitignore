@@ -6,3 +6,5 @@ dist/
 .wwebjs_auth/
 .wwebjs_cache/
 temp/
+src/db/seed.ts
+src/test-run.ts

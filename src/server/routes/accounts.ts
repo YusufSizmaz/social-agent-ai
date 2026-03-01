@@ -60,13 +60,22 @@ accountsRouter.post('/', async (req, res) => {
 accountsRouter.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body as { active?: boolean; role?: string };
+    const updates = req.body as {
+      active?: boolean;
+      role?: string;
+      username?: string;
+      platform?: string;
+      credentials?: Record<string, string>;
+    };
 
     const [updated] = await db
       .update(schema.accounts)
       .set({
         ...(updates.active !== undefined ? { active: updates.active } : {}),
         ...(updates.role ? { role: updates.role as 'primary' | 'secondary' | 'backup' } : {}),
+        ...(updates.username ? { username: updates.username } : {}),
+        ...(updates.platform ? { platform: updates.platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok' } : {}),
+        ...(updates.credentials ? { credentials: updates.credentials } : {}),
       })
       .where(eq(schema.accounts.id, id!))
       .returning();

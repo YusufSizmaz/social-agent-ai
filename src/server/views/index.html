@@ -478,10 +478,9 @@
       try {
         const pid = document.getElementById('dashboard-project-filter').value;
         const qs = pid ? `?projectId=${pid}` : '';
-        const [stats, posts, allAccounts] = await Promise.all([
+        const [stats, posts] = await Promise.all([
           api(`/api/dashboard/stats${qs}`),
           api(`/api/dashboard/recent-posts${qs}`),
-          api(`/api/accounts${qs ? '?projectId=' + pid : ''}`),
         ]);
 
         // Stats
@@ -541,7 +540,13 @@
               </div>`;
           }).join('');
         }
-      } catch (err) { toast(err.message, 'error'); }
+      } catch (err) {
+        ['stat-total','stat-published','stat-failed','stat-accounts','stat-jobs-pending','stat-jobs-processing'].forEach(id => document.getElementById(id).textContent = '0');
+        document.getElementById('platform-breakdown').innerHTML = '<div class="empty" style="padding:20px">Veri yuklenemedi</div>';
+        document.getElementById('project-summary').innerHTML = '<div class="empty" style="padding:20px">Veri yuklenemedi</div>';
+        document.getElementById('recent-activity').innerHTML = '<div class="empty" style="padding:20px">Veri yuklenemedi</div>';
+        toast(err.message, 'error');
+      }
     }
 
     function timeAgo(date) {
@@ -561,7 +566,10 @@
         populateProjectDropdowns();
         renderProjects();
         document.getElementById('nav-projects-count').textContent = projects.length;
-      } catch (err) { toast(err.message, 'error'); }
+      } catch (err) {
+        document.getElementById('projects-grid').innerHTML = '<div class="empty">Projeler yuklenemedi</div>';
+        toast(err.message, 'error');
+      }
     }
 
     function populateProjectDropdowns() {
@@ -700,7 +708,19 @@
         await api(`/api/projects/${id}`, { method: 'DELETE' });
         toast('Proje silindi');
         loadProjects();
-      } catch (err) { toast(err.message, 'error'); }
+      } catch (err) {
+        if (err.message && err.message.includes('hesap')) {
+          if (confirm(err.message + '\n\nTum bagli verileriyle birlikte silinsin mi?')) {
+            try {
+              await api(`/api/projects/${id}?force=true`, { method: 'DELETE' });
+              toast('Proje ve bagli veriler silindi');
+              loadProjects();
+            } catch (err2) { toast(err2.message, 'error'); }
+          }
+        } else {
+          toast(err.message, 'error');
+        }
+      }
     }
 
     // ── Accounts ──
@@ -727,7 +747,10 @@
               <button class="btn btn-danger btn-sm" onclick="deleteAccount('${a.id}')">Sil</button>
             </td>
           </tr>`).join('');
-      } catch (err) { toast(err.message, 'error'); }
+      } catch (err) {
+        document.getElementById('accounts-table').innerHTML = '<tr><td colspan="6" class="empty">Hesaplar yuklenemedi</td></tr>';
+        toast(err.message, 'error');
+      }
     }
 
     function openAccountModal(id, existing) {
@@ -781,8 +804,10 @@
           await api(`/api/accounts/${id}`, {
             method: 'PATCH',
             body: {
-              active: document.getElementById('af-active').checked,
+              username: document.getElementById('af-username').value.trim(),
+              platform: document.getElementById('af-platform').value,
               role: document.getElementById('af-role').value,
+              active: document.getElementById('af-active').checked,
             },
           });
           toast('Hesap guncellendi');
@@ -846,7 +871,10 @@
               <button class="btn btn-danger btn-sm" onclick="deletePost('${p.id}')">Sil</button>
             </td>
           </tr>`).join('');
-      } catch (err) { toast(err.message, 'error'); }
+      } catch (err) {
+        document.getElementById('posts-table').innerHTML = '<tr><td colspan="6" class="empty">Postlar yuklenemedi</td></tr>';
+        toast(err.message, 'error');
+      }
     }
 
     async function deletePost(id) {
