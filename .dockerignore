@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.env
+.env.local
+.DS_Store
+*.log
+.wwebjs_auth
+.wwebjs_cache
+temp
+.claude
+drizzle
+src/db/seed.ts
+src/test-run.ts

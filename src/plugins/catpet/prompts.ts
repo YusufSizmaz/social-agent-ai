@@ -1,4 +1,4 @@
-import type { ContentType, Platform, Tone } from '../../config/constants.js';
+import { Platform, type ContentType, type Tone } from '../../config/constants.js';
 
 interface PromptParams {
   type: 'adoption' | 'lost' | 'awareness';
@@ -13,12 +13,43 @@ interface PromptParams {
   tone: Tone;
 }
 
+function getPlatformInstruction(platform: Platform): string {
+  switch (platform) {
+    case Platform.TWITTER:
+      return `Platform kurallari:
+- Metin 280 karakteri gecmemeli (hashtagler dahil)
+- Kisa, vurucu ve net yaz
+- En fazla 5 hashtag kullan`;
+    case Platform.INSTAGRAM:
+      return `Platform kurallari:
+- Uzun ve detayli bir caption yaz (1000-2000 karakter)
+- 15-20 hashtag kullan
+- Emoji bol kullan
+- Hikaye anlatir gibi yaz, duygusal baglanti kur
+- Ilk cumle dikkat cekici olsun (feed'de gorulur)`;
+    case Platform.YOUTUBE:
+      return `Platform kurallari:
+- Video baslik ve aciklama yaz
+- SEO dostu hashtagler kullan (10-15 adet)
+- Aciklamada detayli bilgi ver`;
+    case Platform.TIKTOK:
+      return `Platform kurallari:
+- Kisa ve enerjik yaz
+- Trend hashtagler kullan (5-10 adet)
+- Gen-Z diline uygun, samimi yaz`;
+  }
+}
+
 export function buildCatpetPrompt(params: PromptParams): string {
+  const platformInstruction = getPlatformInstruction(params.platform);
+
   const baseInstruction = `Sen Turkiye'de hayvan haklari ve sahiplendirme konusunda uzman bir sosyal medya icerik ureticisisin.
 Turkce yaz. Samimi, duygusal ve etkileyici bir dil kullan.
 Platform: ${params.platform}
 Icerik turu: ${params.contentType}
-Ton: ${params.tone}`;
+Ton: ${params.tone}
+
+${platformInstruction}`;
 
   switch (params.type) {
     case 'adoption':

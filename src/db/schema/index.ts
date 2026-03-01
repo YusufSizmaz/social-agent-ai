@@ -10,6 +10,7 @@ import {
   jsonb,
   boolean,
 } from 'drizzle-orm/pg-core';
+import type { AccountStrategy } from '../../types/index.js';
 
 export const platformEnum = pgEnum('platform', ['twitter', 'instagram', 'youtube', 'tiktok']);
 export const contentTypeEnum = pgEnum('content_type', ['text', 'image', 'video', 'story', 'reel', 'short']);
@@ -42,6 +43,7 @@ export const accounts = pgTable('accounts', {
   username: varchar('username', { length: 100 }).notNull(),
   credentials: jsonb('credentials').$type<Record<string, string>>().notNull(),
   active: boolean('active').notNull().default(true),
+  strategy: jsonb('strategy').$type<AccountStrategy>(),
   lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

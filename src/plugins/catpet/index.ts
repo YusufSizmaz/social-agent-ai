@@ -15,7 +15,19 @@ export class CatpetPlugin implements ProjectPlugin {
 
   async poll(): Promise<ContentRequest[]> {
     const listings = await this.listener.pollNewListings();
-    return listings.map((listing) => this.listingToRequest(listing));
+    const requests: ContentRequest[] = [];
+
+    for (const listing of listings) {
+      // Twitter: always generate (TEXT or IMAGE)
+      requests.push(this.listingToRequest(listing, Platform.TWITTER));
+
+      // Instagram: only if listing has images (Instagram requires images)
+      if (listing.imageUrls.length > 0) {
+        requests.push(this.listingToRequest(listing, Platform.INSTAGRAM));
+      }
+    }
+
+    return requests;
   }
 
   transform(content: GeneratedContent): GeneratedContent {
@@ -55,11 +67,19 @@ export class CatpetPlugin implements ProjectPlugin {
     logger.info('Catpet plugin destroyed');
   }
 
-  private listingToRequest(listing: CatpetListing): ContentRequest {
+  private listingToRequest(listing: CatpetListing, platform: Platform): ContentRequest {
+    let contentType: ContentType;
+
+    if (platform === Platform.INSTAGRAM) {
+      contentType = ContentType.IMAGE;
+    } else {
+      contentType = listing.imageUrls.length > 0 ? ContentType.IMAGE : ContentType.TEXT;
+    }
+
     return {
       projectId: 'catpet',
-      platform: Platform.TWITTER,
-      contentType: listing.imageUrls.length > 0 ? ContentType.IMAGE : ContentType.TEXT,
+      platform,
+      contentType,
       tone: listing.type === 'lost' ? Tone.URGENT : Tone.EMOTIONAL,
       prompt: '',
       context: {

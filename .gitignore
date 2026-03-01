@@ -1,10 +1,38 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# Environment
 .env
+.env.local
+.env.*.local
+
+# Logs
 *.log
+logs/
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# WhatsApp session
 .wwebjs_auth/
 .wwebjs_cache/
+
+# Temp files (media pipeline)
 temp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Drizzle Studio
+drizzle/meta/_journal.json
+
+# Test / dev only files
 src/db/seed.ts
 src/test-run.ts

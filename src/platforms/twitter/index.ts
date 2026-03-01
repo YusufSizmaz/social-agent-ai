@@ -83,13 +83,20 @@ export class TwitterAdapter extends BasePlatformAdapter {
 
     const metrics = tweet.data.public_metrics;
 
+    const likes = metrics?.like_count ?? 0;
+    const comments = metrics?.reply_count ?? 0;
+    const retweets = metrics?.retweet_count ?? 0;
+    const quotes = metrics?.quote_count ?? 0;
+    const impressions = metrics?.impression_count ?? 0;
+    const engagement = likes + comments + retweets + quotes;
+
     return {
-      likes: metrics?.like_count ?? 0,
-      comments: metrics?.reply_count ?? 0,
-      shares: metrics?.retweet_count ?? 0,
-      impressions: metrics?.impression_count ?? 0,
-      reach: 0,
-      engagementRate: 0,
+      likes,
+      comments,
+      shares: retweets + quotes,
+      impressions,
+      reach: impressions,
+      engagementRate: impressions > 0 ? (engagement / impressions) * 100 : 0,
     };
   }
 
