@@ -1,5 +1,6 @@
 import { google, type youtube_v3 } from 'googleapis';
 import * as fs from 'fs';
+import * as path from 'path';
 import { Platform } from '../../config/constants.js';
 import { env } from '../../config/env.js';
 import type { GeneratedContent, PlatformPostResult, PostAnalyticsData } from '../../types/index.js';
@@ -39,10 +40,19 @@ export class YouTubeAdapter extends BasePlatformAdapter {
 
   protected async doPost(content: GeneratedContent, _accountId: string): Promise<PlatformPostResult> {
     const youtube = this.getClient();
-    const videoPath = content.mediaUrls?.[0];
+    let videoPath = content.mediaUrls?.[0];
 
     if (!videoPath) {
       return { success: false, error: 'YouTube requires a video file' };
+    }
+
+    // Resolve URL paths (e.g. /public/videos/xxx.mp4) to absolute filesystem paths
+    if (videoPath.startsWith('/public/')) {
+      videoPath = path.resolve(videoPath.slice(1));  // Remove leading slash → "public/videos/..."
+    }
+
+    if (!fs.existsSync(videoPath)) {
+      return { success: false, error: `Video file not found: ${videoPath}` };
     }
 
     const description = [content.text, '', ...content.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`))].join('\n');

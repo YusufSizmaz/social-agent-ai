@@ -1,42 +1,73 @@
 import { TwitterApi, type TweetV2PostTweetResult } from 'twitter-api-v2';
+import { eq } from 'drizzle-orm';
 import { Platform } from '../../config/constants.js';
 import { env } from '../../config/env.js';
 import type { GeneratedContent, PlatformPostResult, PostAnalyticsData } from '../../types/index.js';
 import { BasePlatformAdapter } from '../base.js';
 import { logger } from '../../config/logger.js';
+import { db, schema } from '../../db/index.js';
 
 export class TwitterAdapter extends BasePlatformAdapter {
   platform = Platform.TWITTER as const;
-  private client: TwitterApi | null = null;
+  private fallbackClient: TwitterApi | null = null;
+  private clientCache = new Map<string, TwitterApi>();
 
   async init(): Promise<void> {
     if (!env.TWITTER_API_KEY || !env.TWITTER_API_SECRET || !env.TWITTER_ACCESS_TOKEN || !env.TWITTER_ACCESS_SECRET) {
-      logger.warn('Twitter credentials not configured, adapter will be inactive');
+      logger.warn('Twitter env credentials not configured, will use per-account credentials from DB');
       return;
     }
 
-    this.client = new TwitterApi({
+    this.fallbackClient = new TwitterApi({
       appKey: env.TWITTER_API_KEY,
       appSecret: env.TWITTER_API_SECRET,
       accessToken: env.TWITTER_ACCESS_TOKEN,
       accessSecret: env.TWITTER_ACCESS_SECRET,
     });
 
-    this.log('Adapter initialized');
+    this.log('Adapter initialized with env fallback client');
   }
 
   async destroy(): Promise<void> {
-    this.client = null;
+    this.fallbackClient = null;
+    this.clientCache.clear();
     this.log('Adapter destroyed');
   }
 
-  private getClient(): TwitterApi {
-    if (!this.client) throw new Error('Twitter adapter not initialized');
-    return this.client;
+  private async getClientForAccount(accountId: string): Promise<TwitterApi> {
+    const cached = this.clientCache.get(accountId);
+    if (cached) return cached;
+
+    const [account] = await db
+      .select({ credentials: schema.accounts.credentials })
+      .from(schema.accounts)
+      .where(eq(schema.accounts.id, accountId))
+      .limit(1);
+
+    const creds = account?.credentials as Record<string, string> | undefined;
+
+    if (creds?.apiKey && creds?.apiSecret && creds?.accessToken && creds?.accessSecret) {
+      const client = new TwitterApi({
+        appKey: creds.apiKey,
+        appSecret: creds.apiSecret,
+        accessToken: creds.accessToken,
+        accessSecret: creds.accessSecret,
+      });
+      this.clientCache.set(accountId, client);
+      this.log('Created client from DB credentials', { accountId });
+      return client;
+    }
+
+    if (this.fallbackClient) {
+      this.log('Using fallback env client', { accountId });
+      return this.fallbackClient;
+    }
+
+    throw new Error(`No Twitter credentials found for account ${accountId} and no fallback configured`);
   }
 
-  protected async doPost(content: GeneratedContent, _accountId: string): Promise<PlatformPostResult> {
-    const client = this.getClient();
+  protected async doPost(content: GeneratedContent, accountId: string): Promise<PlatformPostResult> {
+    const client = await this.getClientForAccount(accountId);
     const fullText = [content.text, ...content.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`))].join(' ');
 
     type MediaIdsTuple = [string] | [string, string] | [string, string, string] | [string, string, string, string];
@@ -58,7 +89,7 @@ export class TwitterAdapter extends BasePlatformAdapter {
     });
 
     const tweetId = tweet.data.id;
-    this.log('Tweet posted', { tweetId });
+    this.log('Tweet posted', { tweetId, accountId });
 
     return {
       success: true,
@@ -67,15 +98,15 @@ export class TwitterAdapter extends BasePlatformAdapter {
     };
   }
 
-  protected async doDelete(platformPostId: string, _accountId: string): Promise<boolean> {
-    const client = this.getClient();
+  protected async doDelete(platformPostId: string, accountId: string): Promise<boolean> {
+    const client = await this.getClientForAccount(accountId);
     await client.v2.deleteTweet(platformPostId);
-    this.log('Tweet deleted', { platformPostId });
+    this.log('Tweet deleted', { platformPostId, accountId });
     return true;
   }
 
-  protected async doGetAnalytics(platformPostId: string, _accountId: string): Promise<PostAnalyticsData> {
-    const client = this.getClient();
+  protected async doGetAnalytics(platformPostId: string, accountId: string): Promise<PostAnalyticsData> {
+    const client = await this.getClientForAccount(accountId);
 
     const tweet = await client.v2.singleTweet(platformPostId, {
       'tweet.fields': ['public_metrics'],
@@ -100,8 +131,8 @@ export class TwitterAdapter extends BasePlatformAdapter {
     };
   }
 
-  async reply(platformPostId: string, text: string, _accountId: string): Promise<PlatformPostResult> {
-    const client = this.getClient();
+  async reply(platformPostId: string, text: string, accountId: string): Promise<PlatformPostResult> {
+    const client = await this.getClientForAccount(accountId);
     const tweet = await client.v2.tweet({
       text,
       reply: { in_reply_to_tweet_id: platformPostId },
@@ -114,16 +145,16 @@ export class TwitterAdapter extends BasePlatformAdapter {
     };
   }
 
-  async repost(platformPostId: string, _accountId: string): Promise<PlatformPostResult> {
-    const client = this.getClient();
+  async repost(platformPostId: string, accountId: string): Promise<PlatformPostResult> {
+    const client = await this.getClientForAccount(accountId);
     const me = await client.v2.me();
     await client.v2.retweet(me.data.id, platformPostId);
 
     return { success: true, platformPostId };
   }
 
-  async uploadMedia(filePath: string, _accountId: string): Promise<string> {
-    const client = this.getClient();
+  async uploadMedia(filePath: string, accountId: string): Promise<string> {
+    const client = await this.getClientForAccount(accountId);
     const mediaId = await client.v1.uploadMedia(filePath);
     return mediaId;
   }

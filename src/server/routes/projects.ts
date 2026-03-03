@@ -1,6 +1,27 @@
 import { Router } from 'express';
 import { eq, sql } from 'drizzle-orm';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 import { db, schema } from '../../db/index.js';
+
+const LOGOS_DIR = path.resolve('public/logos');
+if (!fs.existsSync(LOGOS_DIR)) fs.mkdirSync(LOGOS_DIR, { recursive: true });
+
+const logoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, LOGOS_DIR),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname) || '.png';
+      cb(null, `logo_${req.params['id']}_${Date.now()}${ext}`);
+    },
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['image/png', 'image/jpeg', 'image/webp'];
+    cb(null, allowed.includes(file.mimetype));
+  },
+});
 
 export const projectsRouter = Router();
 
@@ -94,13 +115,29 @@ projectsRouter.patch('/:id', async (req, res) => {
       config?: Record<string, unknown>;
     };
 
+    // Merge config: preserve logoUrl if not explicitly provided
+    let mergedConfig = config;
+    if (config !== undefined) {
+      const [existing] = await db
+        .select({ config: schema.projects.config })
+        .from(schema.projects)
+        .where(eq(schema.projects.id, id!))
+        .limit(1);
+      const oldCfg = (existing?.config ?? {}) as Record<string, unknown>;
+      mergedConfig = { ...oldCfg, ...config };
+      // Keep logoUrl from DB unless explicitly set in new config
+      if (!('logoUrl' in config) && oldCfg.logoUrl) {
+        mergedConfig.logoUrl = oldCfg.logoUrl;
+      }
+    }
+
     const [updated] = await db
       .update(schema.projects)
       .set({
         ...(name !== undefined ? { name } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(active !== undefined ? { active } : {}),
-        ...(config !== undefined ? { config } : {}),
+        ...(mergedConfig !== undefined ? { config: mergedConfig } : {}),
         updatedAt: new Date(),
       })
       .where(eq(schema.projects.id, id!))
@@ -112,6 +149,49 @@ projectsRouter.patch('/:id', async (req, res) => {
     }
 
     res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+  }
+});
+
+projectsRouter.post('/:id/logo', logoUpload.single('logo'), async (req, res) => {
+  try {
+    const id = req.params['id'] as string;
+    if (!req.file) {
+      res.status(400).json({ error: 'No valid image file (png/jpeg/webp, max 2MB)' });
+      return;
+    }
+
+    // Get existing project to delete old logo
+    const [project] = await db
+      .select()
+      .from(schema.projects)
+      .where(eq(schema.projects.id, id))
+      .limit(1);
+
+    if (!project) {
+      fs.unlinkSync(req.file.path);
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    // Delete old logo file if exists
+    const oldConfig = (project.config ?? {}) as Record<string, unknown>;
+    if (oldConfig.logoUrl && typeof oldConfig.logoUrl === 'string') {
+      const oldPath = path.resolve('public', oldConfig.logoUrl.replace(/^\/public\//, ''));
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+
+    const logoUrl = `/public/logos/${req.file.filename}`;
+    const newConfig = { ...oldConfig, logoUrl };
+
+    const [updated] = await db
+      .update(schema.projects)
+      .set({ config: newConfig, updatedAt: new Date() })
+      .where(eq(schema.projects.id, id))
+      .returning();
+
+    res.json({ logoUrl, project: updated });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
   }

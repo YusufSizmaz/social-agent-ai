@@ -20,12 +20,12 @@ export class CatpetListener {
   private lastPollTime: Date = new Date();
 
   async init(): Promise<void> {
-    if (!env.CATPET_DATABASE_URL) {
+    if (!env.PLUGIN_DATABASE_URL) {
       logger.warn('Catpet database URL not configured');
       return;
     }
 
-    this.client = postgres(env.CATPET_DATABASE_URL);
+    this.client = postgres(env.PLUGIN_DATABASE_URL);
     this.lastPollTime = new Date();
     logger.info('Catpet listener initialized');
   }

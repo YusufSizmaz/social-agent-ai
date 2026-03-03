@@ -1,5 +1,5 @@
-import { eq } from 'drizzle-orm';
-import { Platform, QUEUE_POLL_INTERVAL_MS, JobType } from '../config/constants.js';
+import { eq, and, ne, gte, sql, isNotNull } from 'drizzle-orm';
+import { Platform, ContentType, QUEUE_POLL_INTERVAL_MS, JobType } from '../config/constants.js';
 import { logger } from '../config/logger.js';
 import type { PlatformAdapter, ProjectPlugin, ContentRequest, GeneratedContent, AccountStrategy } from '../types/index.js';
 import { dequeueJob, completeJob, failJob, enqueueJob } from './queue.js';
@@ -213,9 +213,15 @@ export class Engine {
       action = 'reply';
     }
 
-    // Only handle original content for now (repost/reply require existing posts)
-    if (action !== 'original') {
-      logger.info(`Skipping ${action} action for account ${accountId} — not yet implemented`);
+    // Handle repost action
+    if (action === 'repost') {
+      await this.handleRepost(accountId, projectId, platform);
+      return;
+    }
+
+    // Handle reply action
+    if (action === 'reply') {
+      await this.handleReply(accountId, projectId, platform, strategy);
       return;
     }
 
@@ -292,6 +298,186 @@ export class Engine {
       accountId,
       content,
     });
+  }
+
+  private async findCandidatePosts(
+    accountId: string,
+    projectId: string,
+    platform: Platform,
+  ) {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    return db
+      .select({
+        id: schema.posts.id,
+        platformPostId: schema.posts.platformPostId,
+        accountId: schema.posts.accountId,
+        text: schema.posts.text,
+      })
+      .from(schema.posts)
+      .where(
+        and(
+          eq(schema.posts.projectId, projectId),
+          eq(schema.posts.platform, platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok'),
+          eq(schema.posts.status, 'published'),
+          ne(schema.posts.accountId, accountId),
+          gte(schema.posts.publishedAt, twentyFourHoursAgo),
+          isNotNull(schema.posts.platformPostId),
+        ),
+      );
+  }
+
+  private async getMetadataField(accountId: string, field: string): Promise<Set<string>> {
+    const rows = await db
+      .select({ metadata: schema.posts.metadata })
+      .from(schema.posts)
+      .where(
+        and(
+          eq(schema.posts.accountId, accountId),
+          sql`${schema.posts.metadata}->>${field} IS NOT NULL`,
+        ),
+      );
+
+    return new Set(
+      rows
+        .map(r => (r.metadata as Record<string, unknown>)?.[field] as string)
+        .filter(Boolean),
+    );
+  }
+
+  private async handleRepost(accountId: string, projectId: string, platform: Platform): Promise<void> {
+    const candidatePosts = await this.findCandidatePosts(accountId, projectId, platform);
+    if (candidatePosts.length === 0) {
+      logger.info(`No repostable content found for account ${accountId}, skipping`);
+      return;
+    }
+
+    const repostedIds = await this.getMetadataField(accountId, 'repostOf');
+    const unreposted = candidatePosts.filter(p => !repostedIds.has(p.id));
+
+    if (unreposted.length === 0) {
+      logger.info(`All candidate posts already reposted by account ${accountId}, skipping`);
+      return;
+    }
+
+    const target = unreposted[Math.floor(Math.random() * unreposted.length)]!;
+
+    const adapter = this.adapters.get(platform);
+    if (!adapter?.repost) {
+      logger.warn(`Platform ${platform} does not support repost`);
+      return;
+    }
+
+    const result = await adapter.repost(target.platformPostId!, accountId);
+
+    if (result.success) {
+      await db.insert(schema.posts).values({
+        projectId,
+        accountId,
+        platform: platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok',
+        contentType: 'text',
+        text: `[RT] ${(target.text || '').substring(0, 100)}`,
+        hashtags: [],
+        mediaUrls: [],
+        status: 'published',
+        publishedAt: new Date(),
+        platformPostId: target.platformPostId,
+        metadata: { repostOf: target.id },
+      });
+
+      const username = await this.getAccountUsername(accountId);
+      logger.info(`Repost completed for account ${accountId}`, {
+        originalPostId: target.id,
+        originalAccountId: target.accountId,
+      });
+
+      await notifyContentGenerated({
+        username,
+        platform,
+        contentType: 'text',
+        text: `[RT] ${(target.text || '').substring(0, 80)}`,
+      });
+    }
+  }
+
+  private async handleReply(accountId: string, projectId: string, platform: Platform, strategy: AccountStrategy): Promise<void> {
+    const candidatePosts = await this.findCandidatePosts(accountId, projectId, platform);
+    if (candidatePosts.length === 0) {
+      logger.info(`No replyable content found for account ${accountId}, skipping`);
+      return;
+    }
+
+    const repliedIds = await this.getMetadataField(accountId, 'replyTo');
+    const unreplied = candidatePosts.filter(p => !repliedIds.has(p.id));
+
+    if (unreplied.length === 0) {
+      logger.info(`All candidate posts already replied by account ${accountId}, skipping`);
+      return;
+    }
+
+    const target = unreplied[Math.floor(Math.random() * unreplied.length)]!;
+
+    const adapter = this.adapters.get(platform);
+    if (!adapter?.reply) {
+      logger.warn(`Platform ${platform} does not support reply`);
+      return;
+    }
+
+    const langInstruction = strategy.language === 'tr'
+      ? 'Yaniti mutlaka Turkce yaz.'
+      : strategy.language === 'en'
+        ? 'Write the response in English.'
+        : '';
+
+    const replyPrompt = [
+      strategy.promptTemplate,
+      `Bu posta kisa destekleyici bir yorum yaz: "${(target.text || '').substring(0, 200)}"`,
+      'Yanitini 1-2 cumle ile sinirla. Samimi ve dogal ol.',
+      langInstruction,
+    ].filter(Boolean).join('\n');
+
+    const request: ContentRequest = {
+      projectId,
+      platform,
+      contentType: ContentType.TEXT,
+      tone: strategy.tone,
+      prompt: replyPrompt,
+    };
+
+    const generated = await generateText(request);
+    const replyText = generated.text;
+
+    const result = await adapter.reply(target.platformPostId!, replyText, accountId);
+
+    if (result.success) {
+      await db.insert(schema.posts).values({
+        projectId,
+        accountId,
+        platform: platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok',
+        contentType: 'text',
+        text: replyText,
+        hashtags: [],
+        mediaUrls: [],
+        status: 'published',
+        publishedAt: new Date(),
+        platformPostId: result.platformPostId,
+        platformUrl: result.url,
+        metadata: { replyTo: target.id },
+      });
+
+      const username = await this.getAccountUsername(accountId);
+      logger.info(`Reply completed for account ${accountId}`, {
+        originalPostId: target.id,
+        replyPostId: result.platformPostId,
+      });
+
+      await notifyContentGenerated({
+        username,
+        platform,
+        contentType: 'text',
+        text: `[Reply] ${replyText.substring(0, 80)}`,
+      });
+    }
   }
 
   private async getAccountUsername(accountId: string): Promise<string> {
