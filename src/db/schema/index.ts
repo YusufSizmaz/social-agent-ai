@@ -63,6 +63,7 @@ export const posts = pgTable('posts', {
   platformUrl: text('platform_url'),
   safetyScore: integer('safety_score'),
   qualityScore: integer('quality_score'),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
   errorMessage: text('error_message'),
   scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
   publishedAt: timestamp('published_at', { withTimezone: true }),

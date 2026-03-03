@@ -10,9 +10,7 @@ import { CatpetPlugin } from './plugins/catpet/index.js';
 import { initWhatsApp, destroyWhatsApp } from './notifications/whatsapp.js';
 
 function registerAdapters(): void {
-  if (env.TWITTER_API_KEY) {
-    engine.registerAdapter(new TwitterAdapter());
-  }
+  engine.registerAdapter(new TwitterAdapter());
 
   if (env.INSTAGRAM_ACCESS_TOKEN) {
     engine.registerAdapter(new InstagramAdapter());
@@ -28,7 +26,7 @@ function registerAdapters(): void {
 }
 
 function registerPlugins(): void {
-  if (env.CATPET_DATABASE_URL) {
+  if (env.PLUGIN_DATABASE_URL) {
     engine.registerPlugin(new CatpetPlugin());
   }
 }

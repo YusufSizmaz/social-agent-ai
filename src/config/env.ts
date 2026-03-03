@@ -23,7 +23,9 @@ const envSchema = z.object({
 
   WHATSAPP_ADMIN_NUMBER: z.string().optional(),
 
-  CATPET_DATABASE_URL: z.string().url().optional(),
+  TWITTER_CALLBACK_URL: z.string().url().optional().default('http://localhost:3000/api/twitter/callback'),
+
+  PLUGIN_DATABASE_URL: z.string().url().optional(),
 
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),

@@ -16,6 +16,7 @@ accountsRouter.get('/', async (req, res) => {
       username: schema.accounts.username,
       active: schema.accounts.active,
       strategy: schema.accounts.strategy,
+      credentials: schema.accounts.credentials,
       lastUsedAt: schema.accounts.lastUsedAt,
       createdAt: schema.accounts.createdAt,
     }).from(schema.accounts).$dynamic();
@@ -25,7 +26,12 @@ accountsRouter.get('/', async (req, res) => {
     }
 
     const accounts = await query;
-    res.json(accounts);
+    // Sanitize: don't expose full credentials, just indicate if connected
+    const safe = accounts.map(({ credentials, ...rest }) => ({
+      ...rest,
+      hasCredentials: !!(credentials as Record<string, string>)?.accessToken,
+    }));
+    res.json(safe);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
   }

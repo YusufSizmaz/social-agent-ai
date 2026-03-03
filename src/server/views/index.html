@@ -390,10 +390,10 @@
         <div class="table-wrapper">
           <table>
             <thead>
-              <tr><th>Platform</th><th>Kullanıcı</th><th>Rol</th><th>Proje</th><th>Strateji</th><th>Durum</th><th>İşlemler</th></tr>
+              <tr><th>Platform</th><th>Kullanıcı</th><th>Rol</th><th>Proje</th><th>Strateji</th><th>Baglanti</th><th>Durum</th><th>İşlemler</th></tr>
             </thead>
             <tbody id="accounts-table">
-              <tr><td colspan="7" class="loading">Yükleniyor...</td></tr>
+              <tr><td colspan="8" class="loading">Yükleniyor...</td></tr>
             </tbody>
           </table>
         </div>
@@ -719,6 +719,20 @@
           <textarea id="pf-prompt" placeholder="Gemini icin prompt sablonu...">${esc(cfg.promptTemplate || '')}</textarea>
         </div>
         <div class="form-group">
+          <label>Gorsel Prompt Sablonu</label>
+          <textarea id="pf-imagePrompt" placeholder="Ornek: {{animalType}} in a cozy home, shallow depth of field...">${esc(cfg.imagePromptTemplate || '')}</textarea>
+          <small style="color:var(--text-muted);font-size:0.75rem">Degiskenler: {{text}}, {{animalType}}, {{type}}</small>
+        </div>
+        <div class="form-group">
+          <label>Logo</label>
+          <div style="display:flex;align-items:center;gap:12px">
+            <input type="file" id="pf-logo" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="previewLogo(this)">
+            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('pf-logo').click()">Logo Yukle</button>
+            <img id="pf-logo-preview" src="${esc(cfg.logoUrl || '')}" style="height:40px;border-radius:6px;${cfg.logoUrl ? '' : 'display:none'}">
+            ${cfg.logoUrl ? '<button class="btn btn-danger btn-sm" onclick="removeLogo()">Kaldir</button>' : ''}
+          </div>
+        </div>
+        <div class="form-group">
           <label>Zamanlama (cron)</label>
           <input id="pf-schedule" value="${esc(cfg.scheduleExpression || '')}" placeholder="*/30 * * * *">
         </div>
@@ -750,6 +764,7 @@
           defaultContentType: document.getElementById('pf-contentType').value,
           platforms,
           promptTemplate: document.getElementById('pf-prompt').value,
+          imagePromptTemplate: document.getElementById('pf-imagePrompt').value,
           scheduleExpression: document.getElementById('pf-schedule').value,
           autoPublish: document.getElementById('pf-autoPublish').checked,
         };
@@ -759,16 +774,42 @@
           active: document.getElementById('pf-active').checked,
           config,
         };
+        let projectId = id;
         if (id) {
           await api(`/api/projects/${id}`, { method: 'PATCH', body: payload });
           toast('Proje guncellendi');
         } else {
-          await api('/api/projects', { method: 'POST', body: payload });
+          const created = await api('/api/projects', { method: 'POST', body: payload });
+          projectId = created.id;
           toast('Proje olusturuldu');
+        }
+        // Upload logo if selected
+        const logoFile = document.getElementById('pf-logo')?.files?.[0];
+        if (logoFile && projectId) {
+          const fd = new FormData();
+          fd.append('logo', logoFile);
+          const resp = await fetch(`/api/projects/${projectId}/logo`, { method: 'POST', body: fd });
+          if (!resp.ok) toast('Logo yuklenemedi', 'error');
         }
         closeModal();
         loadProjects();
       } catch (err) { toast(err.message, 'error'); }
+    }
+
+    function previewLogo(input) {
+      const file = input.files?.[0];
+      const preview = document.getElementById('pf-logo-preview');
+      if (file && preview) {
+        preview.src = URL.createObjectURL(file);
+        preview.style.display = '';
+      }
+    }
+
+    function removeLogo() {
+      const preview = document.getElementById('pf-logo-preview');
+      if (preview) { preview.src = ''; preview.style.display = 'none'; }
+      const input = document.getElementById('pf-logo');
+      if (input) input.value = '';
     }
 
     async function deleteProject(id) {
@@ -801,7 +842,7 @@
         document.getElementById('nav-accounts-count').textContent = accounts.length;
         const tbody = document.getElementById('accounts-table');
         if (accounts.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="7" class="empty">Hesap bulunamadi</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="8" class="empty">Hesap bulunamadi</td></tr>';
           return;
         }
         tbody.innerHTML = accounts.map(a => {
@@ -816,6 +857,7 @@
             <td>${a.role}</td>
             <td>${projectsMap[a.projectId] || '-'}</td>
             <td>${stratBadge}</td>
+            <td><span class="badge ${a.hasCredentials ? 'badge-active' : 'badge-inactive'}">${a.hasCredentials ? 'Bagli' : 'Bagli Degil'}</span></td>
             <td><span class="badge badge-${a.active?'active':'inactive'}">${a.active?'Aktif':'Pasif'}</span></td>
             <td>
               <button class="btn btn-ghost btn-sm" onclick="openAccountModal('${a.id}', ${JSON.stringify(a).replace(/"/g,'&quot;')})">Duzenle</button>
@@ -824,7 +866,7 @@
           </tr>`;
         }).join('');
       } catch (err) {
-        document.getElementById('accounts-table').innerHTML = '<tr><td colspan="7" class="empty">Hesaplar yuklenemedi</td></tr>';
+        document.getElementById('accounts-table').innerHTML = '<tr><td colspan="8" class="empty">Hesaplar yuklenemedi</td></tr>';
         toast(err.message, 'error');
       }
     }
@@ -842,7 +884,7 @@
         </div>
         <div class="form-group">
           <label>Platform</label>
-          <select id="af-platform">
+          <select id="af-platform" onchange="toggleOAuthSection()">
             ${['twitter','instagram','youtube','tiktok'].map(pl =>
               `<option value="${pl}" ${a.platform===pl?'selected':''}>${pl}</option>`
             ).join('')}
@@ -860,9 +902,36 @@
             ).join('')}
           </select>
         </div>
-        ${!id ? `<div class="form-group">
-          <label>Credentials (JSON)</label>
-          <textarea id="af-credentials" placeholder='{"apiKey": "...", "secret": "..."}'>{}</textarea>
+        <div id="af-creds-section" style="display:${(a.platform || 'twitter') === 'twitter' ? 'block' : 'none'}">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <label style="font-size:0.8rem;color:var(--text-secondary);font-weight:500;margin:0">Twitter Credentials</label>
+            <span id="af-twitter-status" class="badge ${a.hasCredentials ? 'badge-active' : 'badge-inactive'}">${a.hasCredentials ? 'Bagli' : 'Bagli Degil'}</span>
+          </div>
+          <div class="form-group">
+            <label>API Key (Consumer Key)</label>
+            <input id="af-cred-apiKey" type="password" value="${esc(a._apiKey || '')}" placeholder="Twitter API Key">
+          </div>
+          <div class="form-group">
+            <label>API Secret (Consumer Secret)</label>
+            <input id="af-cred-apiSecret" type="password" value="${esc(a._apiSecret || '')}" placeholder="Twitter API Secret">
+          </div>
+          <div class="form-group">
+            <label>Access Token</label>
+            <input id="af-cred-accessToken" type="password" value="${esc(a._accessToken || '')}" placeholder="Access Token">
+          </div>
+          <div class="form-group">
+            <label>Access Secret</label>
+            <input id="af-cred-accessSecret" type="password" value="${esc(a._accessSecret || '')}" placeholder="Access Secret">
+          </div>
+          <div style="margin-bottom:16px">
+            <small style="color:var(--text-muted);font-size:0.7rem">Developer Portal → App → Keys and Tokens bolumunden alinir</small>
+          </div>
+        </div>
+        ${!id ? `<div id="af-json-creds-section" style="display:${(a.platform || 'twitter') === 'twitter' ? 'none' : 'block'}">
+          <div class="form-group">
+            <label>Credentials (JSON)</label>
+            <textarea id="af-credentials" placeholder='{"key": "...", "secret": "..."}'>{}</textarea>
+          </div>
         </div>` : ''}
         <div class="form-group">
           <div class="toggle-row">
@@ -879,6 +948,15 @@
             <label>Strateji Aktif</label>
             <label class="toggle"><input type="checkbox" id="af-strat-active" ${s.active?'checked':''}><span class="toggle-slider"></span></label>
           </div>
+        </div>
+        <div class="form-group">
+          <label>Hesap Rolu</label>
+          <select id="af-strat-role" onchange="applyRolePreset()">
+            <option value="tanitim" ${(s.role||'')==='tanitim'?'selected':''}>Tanitim</option>
+            <option value="farkindalik" ${(s.role||'')==='farkindalik'?'selected':''}>Farkindalik</option>
+            <option value="pr" ${(s.role||'')==='pr'?'selected':''}>PR / Genel</option>
+            <option value="custom" ${!s.role || s.role==='custom'?'selected':''}>Ozel</option>
+          </select>
         </div>
         <div class="form-group">
           <label>Ton</label>
@@ -919,7 +997,7 @@
         </div>
         <div class="form-group">
           <label>Sabit Hashtagler (virgülle ayirin)</label>
-          <input id="af-strat-hashtags" value="${esc((s.hashtags||[]).join(', '))}" placeholder="#kedi, #sahiplen">
+          <input id="af-strat-hashtags" value="${esc((s.hashtags||[]).join(', '))}" placeholder="#hashtag1, #hashtag2">
         </div>
         <div class="form-group">
           <label>Dil</label>
@@ -954,6 +1032,7 @@
       const hashtags = hashtagsRaw ? hashtagsRaw.split(',').map(h => h.trim()).filter(Boolean) : [];
       return {
         active,
+        role: document.getElementById('af-strat-role')?.value || 'custom',
         tone: document.getElementById('af-strat-tone')?.value || 'friendly',
         contentTypes: contentTypes.length ? contentTypes : ['text'],
         promptTemplate: document.getElementById('af-strat-prompt')?.value || '',
@@ -968,32 +1047,80 @@
       };
     }
 
+    function toggleOAuthSection() {
+      const platform = document.getElementById('af-platform')?.value;
+      const credsSection = document.getElementById('af-creds-section');
+      const jsonSection = document.getElementById('af-json-creds-section');
+      if (credsSection) credsSection.style.display = platform === 'twitter' ? 'block' : 'none';
+      if (jsonSection) jsonSection.style.display = platform === 'twitter' ? 'none' : 'block';
+    }
+
+    function applyRolePreset() {
+      const role = document.getElementById('af-strat-role')?.value;
+      const presets = {
+        tanitim: { original: 80, repost: 10, reply: 10, tone: 'friendly' },
+        farkindalik: { original: 60, repost: 20, reply: 20, tone: 'emotional' },
+        pr: { original: 70, repost: 15, reply: 15, tone: 'informative' },
+      };
+      const p = presets[role];
+      if (!p) return;
+      document.getElementById('af-strat-original').value = p.original;
+      document.getElementById('af-strat-repost').value = p.repost;
+      document.getElementById('af-strat-reply').value = p.reply;
+      document.getElementById('af-strat-tone').value = p.tone;
+    }
+
+
+    function getCredentialsFromForm() {
+      const platform = document.getElementById('af-platform').value;
+      if (platform === 'twitter') {
+        const apiKey = document.getElementById('af-cred-apiKey')?.value?.trim();
+        const apiSecret = document.getElementById('af-cred-apiSecret')?.value?.trim();
+        const accessToken = document.getElementById('af-cred-accessToken')?.value?.trim();
+        const accessSecret = document.getElementById('af-cred-accessSecret')?.value?.trim();
+        if (apiKey && apiSecret && accessToken && accessSecret) {
+          return { apiKey, apiSecret, accessToken, accessSecret };
+        }
+        if (apiKey || apiSecret || accessToken || accessSecret) {
+          return null; // partially filled = error
+        }
+        return undefined; // empty = skip
+      }
+      const el = document.getElementById('af-credentials');
+      if (!el) return undefined;
+      try { return JSON.parse(el.value); }
+      catch { return null; }
+    }
+
     async function saveAccount(id) {
       try {
         const strategy = getStrategyFromForm();
+        const platform = document.getElementById('af-platform').value;
+        const credentials = getCredentialsFromForm();
+        if (credentials === null) {
+          toast(platform === 'twitter' ? 'Twitter credentials eksik — tum 4 alani doldurun' : 'Credentials JSON gecersiz', 'error');
+          return;
+        }
         if (id) {
-          await api(`/api/accounts/${id}`, {
-            method: 'PATCH',
-            body: {
-              username: document.getElementById('af-username').value.trim(),
-              platform: document.getElementById('af-platform').value,
-              role: document.getElementById('af-role').value,
-              active: document.getElementById('af-active').checked,
-              strategy,
-            },
-          });
+          const body = {
+            username: document.getElementById('af-username').value.trim(),
+            platform,
+            role: document.getElementById('af-role').value,
+            active: document.getElementById('af-active').checked,
+            strategy,
+          };
+          if (credentials) body.credentials = credentials;
+          await api(`/api/accounts/${id}`, { method: 'PATCH', body });
           toast('Hesap guncellendi');
         } else {
           const username = document.getElementById('af-username').value.trim();
           if (!username) { toast('Kullanici adi zorunlu', 'error'); return; }
-          let credentials;
-          try { credentials = JSON.parse(document.getElementById('af-credentials').value); }
-          catch { toast('Credentials JSON gecersiz', 'error'); return; }
+          if (!credentials) { toast('Credentials zorunlu', 'error'); return; }
           await api('/api/accounts', {
             method: 'POST',
             body: {
               projectId: document.getElementById('af-project').value,
-              platform: document.getElementById('af-platform').value,
+              platform,
               username,
               role: document.getElementById('af-role').value,
               credentials,
@@ -1034,20 +1161,93 @@
           return;
         }
         tbody.innerHTML = posts.map(p => `
-          <tr>
+          <tr style="cursor:pointer" onclick="viewPost('${p.id}')">
             <td><span class="badge badge-${p.platform}">${p.platform}</span></td>
             <td style="color:var(--text-secondary);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((p.text || '').substring(0, 80))}</td>
             <td style="color:var(--text-muted)">${p.contentType}</td>
             <td><span class="badge badge-${p.status}">${p.status}</span></td>
             <td style="color:var(--text-muted)">${new Date(p.createdAt).toLocaleDateString('tr-TR')}</td>
             <td>
-              <button class="btn btn-danger btn-sm" onclick="deletePost('${p.id}')">Sil</button>
+              ${p.status === 'review' ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();approvePost('${p.id}')">Onayla</button>` : ''}
+              ${['review','scheduled'].includes(p.status) ? `<button class="btn btn-primary btn-sm" style="background:#16a34a;border-color:#16a34a" onclick="event.stopPropagation();publishPost('${p.id}','${p.platform}')">Yayinla</button>` : ''}
+              <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deletePost('${p.id}')">Sil</button>
             </td>
           </tr>`).join('');
       } catch (err) {
         document.getElementById('posts-table').innerHTML = '<tr><td colspan="6" class="empty">Postlar yuklenemedi</td></tr>';
         toast(err.message, 'error');
       }
+    }
+
+    async function viewPost(id) {
+      try {
+        const post = await api(`/api/posts/${id}`);
+        const hashtags = (post.hashtags || []).map(t => t.startsWith('#') ? t : '#' + t).join(' ');
+        const videoUrl = (post.mediaUrls || []).find(u => u.endsWith('.mp4'));
+        const body = `
+          ${videoUrl ? `
+          <div class="form-group">
+            <label>Video</label>
+            <video controls style="width:100%;max-height:400px;border-radius:8px;background:#000" src="${videoUrl}"></video>
+            <a href="${videoUrl}" download style="display:inline-block;margin-top:8px;font-size:0.8rem;color:var(--accent-dim)">Videoyu indir</a>
+          </div>` : ''}
+          <div class="form-group">
+            <label>Platform</label>
+            <span class="badge badge-${post.platform}" style="font-size:0.85rem">${post.platform}</span>
+            <span class="badge badge-${post.status}" style="font-size:0.85rem;margin-left:8px">${post.status}</span>
+          </div>
+          <div class="form-group">
+            <label>Icerik</label>
+            <textarea id="vp-text" rows="6" style="white-space:pre-wrap">${esc(post.text || '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label>Hashtagler</label>
+            <input id="vp-hashtags" value="${esc(hashtags)}">
+          </div>
+          <div class="form-group" style="color:var(--text-muted);font-size:0.8rem">
+            Tur: ${post.contentType} · Ton: ${post.tone || '-'} · ${new Date(post.createdAt).toLocaleString('tr-TR')}
+          </div>`;
+        const actions = [];
+        if (post.status === 'review') {
+          actions.push(`<button class="btn btn-primary" onclick="approvePost('${id}')">Onayla</button>`);
+        }
+        if (['review','scheduled'].includes(post.status)) {
+          actions.push(`<button class="btn btn-primary" style="background:#16a34a;border-color:#16a34a" onclick="publishPost('${id}','${post.platform}')">Yayinla</button>`);
+        }
+        actions.push(`<button class="btn btn-secondary" onclick="savePost('${id}')">Kaydet</button>`);
+        actions.push(`<button class="btn btn-secondary" onclick="closeModal()">Kapat</button>`);
+        openModal('Post Detay', body, actions.join(' '));
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    async function savePost(id) {
+      try {
+        const text = document.getElementById('vp-text').value;
+        const hashtagStr = document.getElementById('vp-hashtags').value;
+        const hashtags = hashtagStr.split(/\s+/).map(t => t.replace(/^#/, '')).filter(Boolean);
+        await api(`/api/posts/${id}`, { method: 'PATCH', body: { text, hashtags } });
+        toast('Post guncellendi');
+        closeModal();
+        loadPosts();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    async function approvePost(id) {
+      try {
+        await api(`/api/posts/${id}`, { method: 'PATCH', body: { status: 'scheduled' } });
+        toast('Post onaylandi ve zamanlanmaya alindi');
+        closeModal();
+        loadPosts();
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    async function publishPost(id, platform) {
+      if (!confirm(`Bu postu ${platform} uzerinde yayinlamak istediginize emin misiniz?`)) return;
+      try {
+        await api(`/api/posts/${id}/publish`, { method: 'POST' });
+        toast('Post yayinlama kuyruğuna eklendi');
+        loadPosts();
+      } catch (err) { toast(err.message, 'error'); }
     }
 
     async function deletePost(id) {
@@ -1128,25 +1328,58 @@
       if (!prompt) { toast('Prompt zorunlu', 'error'); return; }
 
       btn.disabled = true;
-      btn.innerHTML = '<span class="spinner"></span> Uretiliyor...';
+      const ct = document.getElementById('gf-contentType').value;
+      const isVideo = ['video','short','reel'].includes(ct);
+      btn.innerHTML = isVideo
+        ? '<span class="spinner"></span> Video uretiliyor (~40sn)...'
+        : '<span class="spinner"></span> Uretiliyor...';
 
       try {
-        const result = await api('/api/posts/generate', {
+        const body = {
+          projectId: document.getElementById('gf-project').value,
+          platform: document.getElementById('gf-platform').value,
+          tone: document.getElementById('gf-tone').value,
+          contentType: ct,
+          prompt,
+        };
+        // Video takes longer — use raw fetch with no timeout
+        const resp = await fetch('/api/posts/generate', {
           method: 'POST',
-          body: {
-            projectId: document.getElementById('gf-project').value,
-            platform: document.getElementById('gf-platform').value,
-            tone: document.getElementById('gf-tone').value,
-            contentType: document.getElementById('gf-contentType').value,
-            prompt,
-          },
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
         });
+        const result = await resp.json();
+        if (!resp.ok) throw new Error(result.error || 'Bir hata olustu');
 
         const preview = document.getElementById('gf-preview');
         preview.style.display = 'block';
-        document.getElementById('gf-preview-text').textContent = result.generated?.text || result.post?.text || '';
-        const tags = result.generated?.hashtags || [];
-        document.getElementById('gf-preview-hashtags').textContent = tags.map(t => '#' + t).join(' ');
+        const textVal = result.generated?.text || result.post?.text || '';
+        const tags = result.generated?.hashtags || result.post?.hashtags || [];
+        document.getElementById('gf-preview-text').textContent = textVal;
+        document.getElementById('gf-preview-hashtags').textContent = tags.map(t => t.startsWith('#') ? t : '#' + t).join(' ');
+
+        // Show video player if video was generated
+        const videoUrl = (result.generated?.mediaUrls || result.post?.mediaUrls || []).find(u => u?.endsWith('.mp4'));
+        let videoEl = document.getElementById('gf-preview-video');
+        if (videoUrl) {
+          if (!videoEl) {
+            videoEl = document.createElement('video');
+            videoEl.id = 'gf-preview-video';
+            videoEl.controls = true;
+            videoEl.style.cssText = 'width:100%;max-height:360px;border-radius:8px;background:#000;margin-top:12px';
+            preview.insertBefore(videoEl, preview.firstChild);
+          }
+          videoEl.src = videoUrl;
+          videoEl.style.display = '';
+        } else if (videoEl) {
+          videoEl.style.display = 'none';
+        }
+
+        // Scroll preview into view
+        preview.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        // Refresh posts list
+        loadPosts();
 
         toast('Icerik uretildi ve inceleme olarak kaydedildi');
         btn.textContent = 'Tekrar Uret';

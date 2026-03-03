@@ -9,6 +9,9 @@ dist/
 .env.local
 .env.*.local
 
+# Public
+public/
+
 # Logs
 *.log
 logs/

@@ -1,8 +1,9 @@
-import { Client, LocalAuth } from 'whatsapp-web.js';
+import pkg from 'whatsapp-web.js';
+const { Client, LocalAuth } = pkg;
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 
-let client: Client | null = null;
+let client: InstanceType<typeof Client> | null = null;
 let ready = false;
 
 export async function initWhatsApp(): Promise<void> {
@@ -21,11 +22,11 @@ export async function initWhatsApp(): Promise<void> {
     logger.info('WhatsApp client ready');
   });
 
-  client.on('auth_failure', (msg) => {
+  client.on('auth_failure', (msg: string) => {
     logger.error('WhatsApp auth failure', { message: msg });
   });
 
-  client.on('disconnected', (reason) => {
+  client.on('disconnected', (reason: string) => {
     ready = false;
     logger.warn('WhatsApp disconnected', { reason });
   });
