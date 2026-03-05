@@ -1,7 +1,7 @@
 {
   "name": "social-media-bot",
   "version": "1.0.0",
-  "description": "Modular, type-safe social media automation platform for Turkish content",
+  "description": "Open-source, self-hosted AI-powered social media automation platform with multi-platform publishing, analytics, and autonomous strategy optimization",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
