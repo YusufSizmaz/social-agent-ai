@@ -7,12 +7,34 @@ import { BasePlatformAdapter } from '../base.js';
 import { logger } from '../../config/logger.js';
 import { db, schema } from '../../db/index.js';
 
+type TwitterAccount = {
+  username: string;
+  credentials: Record<string, string>;
+};
+
+type XquikTweetResponse = {
+  tweetId?: unknown;
+  writeActionId?: unknown;
+  error?: unknown;
+  message?: unknown;
+};
+
 export class TwitterAdapter extends BasePlatformAdapter {
   platform = Platform.TWITTER as const;
   private fallbackClient: TwitterApi | null = null;
   private clientCache = new Map<string, TwitterApi>();
 
   async init(): Promise<void> {
+    if (env.TWITTER_BACKEND === 'xquik') {
+      if (!env.XQUIK_API_KEY) {
+        logger.warn('Xquik backend selected but XQUIK_API_KEY is not configured');
+        return;
+      }
+
+      this.log('Adapter initialized with Xquik backend');
+      return;
+    }
+
     if (!env.TWITTER_API_KEY || !env.TWITTER_API_SECRET || !env.TWITTER_ACCESS_TOKEN || !env.TWITTER_ACCESS_SECRET) {
       logger.warn('Twitter env credentials not configured, will use per-account credentials from DB');
       return;
@@ -34,17 +56,32 @@ export class TwitterAdapter extends BasePlatformAdapter {
     this.log('Adapter destroyed');
   }
 
-  private async getClientForAccount(accountId: string): Promise<TwitterApi> {
-    const cached = this.clientCache.get(accountId);
-    if (cached) return cached;
-
+  private async getAccount(accountId: string): Promise<TwitterAccount | null> {
     const [account] = await db
-      .select({ credentials: schema.accounts.credentials })
+      .select({
+        username: schema.accounts.username,
+        credentials: schema.accounts.credentials,
+      })
       .from(schema.accounts)
       .where(eq(schema.accounts.id, accountId))
       .limit(1);
 
-    const creds = account?.credentials as Record<string, string> | undefined;
+    if (!account) {
+      return null;
+    }
+
+    return {
+      username: account.username,
+      credentials: account.credentials as Record<string, string>,
+    };
+  }
+
+  private async getClientForAccount(accountId: string): Promise<TwitterApi> {
+    const cached = this.clientCache.get(accountId);
+    if (cached) return cached;
+
+    const account = await this.getAccount(accountId);
+    const creds = account?.credentials;
 
     if (creds?.apiKey && creds?.apiSecret && creds?.accessToken && creds?.accessSecret) {
       const client = new TwitterApi({
@@ -66,9 +103,92 @@ export class TwitterAdapter extends BasePlatformAdapter {
     throw new Error(`No Twitter credentials found for account ${accountId} and no fallback configured`);
   }
 
+  private formatText(content: GeneratedContent): string {
+    return [content.text, ...content.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`))].join(' ');
+  }
+
+  private tweetUrl(tweetId: string): string {
+    return `https://twitter.com/i/status/${tweetId}`;
+  }
+
+  private async getXquikAccount(accountId: string): Promise<string> {
+    const account = await this.getAccount(accountId);
+    return account?.credentials.xquikAccount ?? env.XQUIK_ACCOUNT ?? account?.username ?? accountId;
+  }
+
+  private async createTweetWithXquik(params: {
+    accountId: string;
+    text: string;
+    mediaUrls?: string[];
+    replyToTweetId?: string;
+  }): Promise<PlatformPostResult> {
+    if (!env.XQUIK_API_KEY) {
+      return { success: false, error: 'XQUIK_API_KEY is required when TWITTER_BACKEND=xquik' };
+    }
+
+    const account = await this.getXquikAccount(params.accountId);
+    const payload: Record<string, unknown> = {
+      account,
+      text: params.text.slice(0, 280),
+    };
+
+    if (params.replyToTweetId) {
+      payload.reply_to_tweet_id = params.replyToTweetId;
+    }
+
+    if (params.mediaUrls?.length) {
+      payload.media = params.mediaUrls.slice(0, 4);
+    }
+
+    const response = await fetch(`${env.XQUIK_BASE_URL.replace(/\/+$/, '')}/api/v1/x/tweets`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': env.XQUIK_API_KEY,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json() as XquikTweetResponse;
+    const tweetId = typeof data.tweetId === 'string' ? data.tweetId : '';
+
+    if (tweetId) {
+      this.log('Tweet posted with Xquik', { tweetId, accountId: params.accountId });
+      return {
+        success: true,
+        platformPostId: tweetId,
+        url: this.tweetUrl(tweetId),
+      };
+    }
+
+    const writeActionId = typeof data.writeActionId === 'string' ? data.writeActionId : '';
+    if (writeActionId) {
+      return {
+        success: false,
+        error: `Xquik write pending confirmation: ${writeActionId}`,
+      };
+    }
+
+    const message = typeof data.message === 'string' ? data.message : undefined;
+    const error = typeof data.error === 'string' ? data.error : undefined;
+    return {
+      success: false,
+      error: message ?? error ?? `Xquik request failed with HTTP ${response.status}`,
+    };
+  }
+
   protected async doPost(content: GeneratedContent, accountId: string): Promise<PlatformPostResult> {
+    const fullText = this.formatText(content);
+
+    if (env.TWITTER_BACKEND === 'xquik') {
+      return this.createTweetWithXquik({
+        accountId,
+        text: fullText,
+        mediaUrls: content.mediaUrls,
+      });
+    }
+
     const client = await this.getClientForAccount(accountId);
-    const fullText = [content.text, ...content.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`))].join(' ');
 
     type MediaIdsTuple = [string] | [string, string] | [string, string, string] | [string, string, string, string];
     let mediaIds: MediaIdsTuple | undefined;
@@ -94,7 +214,7 @@ export class TwitterAdapter extends BasePlatformAdapter {
     return {
       success: true,
       platformPostId: tweetId,
-      url: `https://twitter.com/i/status/${tweetId}`,
+      url: this.tweetUrl(tweetId),
     };
   }
 
@@ -132,6 +252,14 @@ export class TwitterAdapter extends BasePlatformAdapter {
   }
 
   async reply(platformPostId: string, text: string, accountId: string): Promise<PlatformPostResult> {
+    if (env.TWITTER_BACKEND === 'xquik') {
+      return this.createTweetWithXquik({
+        accountId,
+        text,
+        replyToTweetId: platformPostId,
+      });
+    }
+
     const client = await this.getClientForAccount(accountId);
     const tweet = await client.v2.tweet({
       text,
@@ -141,7 +269,7 @@ export class TwitterAdapter extends BasePlatformAdapter {
     return {
       success: true,
       platformPostId: tweet.data.id,
-      url: `https://twitter.com/i/status/${tweet.data.id}`,
+      url: this.tweetUrl(tweet.data.id),
     };
   }
 

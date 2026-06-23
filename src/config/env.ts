@@ -9,6 +9,10 @@ const envSchema = z.object({
   TWITTER_API_SECRET: z.string().optional(),
   TWITTER_ACCESS_TOKEN: z.string().optional(),
   TWITTER_ACCESS_SECRET: z.string().optional(),
+  TWITTER_BACKEND: z.enum(['twitter', 'xquik']).default('twitter'),
+  XQUIK_API_KEY: z.string().optional(),
+  XQUIK_ACCOUNT: z.string().optional(),
+  XQUIK_BASE_URL: z.string().url().default('https://xquik.com'),
 
   INSTAGRAM_ACCESS_TOKEN: z.string().optional(),
   INSTAGRAM_BUSINESS_ACCOUNT_ID: z.string().optional(),
