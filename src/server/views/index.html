@@ -463,6 +463,7 @@
     // ── State ──
     let projects = [];
     let projectsMap = {};
+    let accountsById = {};
 
     // ── Toast ──
     function toast(msg, type = 'success') {
@@ -506,8 +507,14 @@
         ...opts,
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Bir hata olustu');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = data.issues?.length ? ': ' + data.issues.map(i => `${i.path} ${i.message}`).join(', ') : '';
+        const error = new Error((data.error || 'Bir hata olustu') + detail);
+        error.status = res.status;
+        error.data = data;
+        throw error;
+      }
       return data;
     }
 
@@ -646,7 +653,7 @@
         const sel = document.getElementById(id);
         const val = sel.value;
         sel.innerHTML = '<option value="">Tum Projeler</option>' +
-          projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+          projects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
         sel.value = val;
       });
     }
@@ -715,6 +722,14 @@
           </select>
         </div>
         <div class="form-group">
+          <label>Icerik Dili</label>
+          <select id="pf-language">
+            ${[['tr','Turkce'],['en','English'],['de','Deutsch'],['es','Espanol'],['fr','Francais']].map(([code, name]) =>
+              `<option value="${code}" ${(cfg.language || 'tr')===code?'selected':''}>${name}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
           <label>Prompt Sablonu</label>
           <textarea id="pf-prompt" placeholder="Gemini icin prompt sablonu...">${esc(cfg.promptTemplate || '')}</textarea>
         </div>
@@ -767,6 +782,7 @@
           imagePromptTemplate: document.getElementById('pf-imagePrompt').value,
           scheduleExpression: document.getElementById('pf-schedule').value,
           autoPublish: document.getElementById('pf-autoPublish').checked,
+          language: document.getElementById('pf-language').value,
         };
         const payload = {
           name,
@@ -819,8 +835,9 @@
         toast('Proje silindi');
         loadProjects();
       } catch (err) {
-        if (err.message && err.message.includes('hesap')) {
-          if (confirm(err.message + '\n\nTum bagli verileriyle birlikte silinsin mi?')) {
+        if (err.status === 409) {
+          const d = err.data || {};
+          if (confirm(`Bu projeye bagli ${d.accountCount ?? 0} hesap ve ${d.postCount ?? 0} post var.\n\nTum bagli verileriyle birlikte silinsin mi?`)) {
             try {
               await api(`/api/projects/${id}?force=true`, { method: 'DELETE' });
               toast('Proje ve bagli veriler silindi');
@@ -845,22 +862,24 @@
           tbody.innerHTML = '<tr><td colspan="8" class="empty">Hesap bulunamadi</td></tr>';
           return;
         }
+        accountsById = {};
+        accounts.forEach(a => accountsById[a.id] = a);
         tbody.innerHTML = accounts.map(a => {
           const s = a.strategy;
           const stratBadge = s?.active
-            ? `<span class="badge badge-active" title="${s.cronExpression}">${s.tone} · ${s.cronExpression}</span>`
+            ? `<span class="badge badge-active" title="${esc(s.cronExpression)}">${esc(s.tone)} · ${esc(s.cronExpression)}</span>`
             : '<span class="badge badge-inactive">Yok</span>';
           return `
           <tr>
             <td><span class="badge badge-${a.platform}">${a.platform}</span></td>
             <td style="color:var(--text);font-weight:500">${esc(a.username)}</td>
             <td>${a.role}</td>
-            <td>${projectsMap[a.projectId] || '-'}</td>
+            <td>${esc(projectsMap[a.projectId] || '-')}</td>
             <td>${stratBadge}</td>
             <td><span class="badge ${a.hasCredentials ? 'badge-active' : 'badge-inactive'}">${a.hasCredentials ? 'Bagli' : 'Bagli Degil'}</span></td>
             <td><span class="badge badge-${a.active?'active':'inactive'}">${a.active?'Aktif':'Pasif'}</span></td>
             <td>
-              <button class="btn btn-ghost btn-sm" onclick="openAccountModal('${a.id}', ${JSON.stringify(a).replace(/"/g,'&quot;')})">Duzenle</button>
+              <button class="btn btn-ghost btn-sm" onclick="openAccountModal('${a.id}', accountsById['${a.id}'])">Duzenle</button>
               <button class="btn btn-danger btn-sm" onclick="deleteAccount('${a.id}')">Sil</button>
             </td>
           </tr>`;
@@ -879,7 +898,7 @@
         <div class="form-group">
           <label>Proje</label>
           <select id="af-project">
-            ${projects.map(p => `<option value="${p.id}" ${a.projectId===p.id?'selected':''}>${p.name}</option>`).join('')}
+            ${projects.map(p => `<option value="${p.id}" ${a.projectId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
@@ -1004,6 +1023,9 @@
           <select id="af-strat-lang">
             <option value="tr" ${(s.language||'tr')==='tr'?'selected':''}>Turkce</option>
             <option value="en" ${s.language==='en'?'selected':''}>English</option>
+            <option value="de" ${s.language==='de'?'selected':''}>Deutsch</option>
+            <option value="es" ${s.language==='es'?'selected':''}>Espanol</option>
+            <option value="fr" ${s.language==='fr'?'selected':''}>Francais</option>
           </select>
         </div>`;
       const footer = `
@@ -1140,7 +1162,17 @@
         await api(`/api/accounts/${id}`, { method: 'DELETE' });
         toast('Hesap silindi');
         loadAccounts();
-      } catch (err) { toast(err.message, 'error'); }
+      } catch (err) {
+        if (err.status === 409 && confirm(`Bu hesaba ait ${err.data?.postCount ?? 0} post var.\n\nPostlarla birlikte silinsin mi?`)) {
+          try {
+            await api(`/api/accounts/${id}?force=true`, { method: 'DELETE' });
+            toast('Hesap ve postlari silindi');
+            loadAccounts();
+          } catch (err2) { toast(err2.message, 'error'); }
+        } else if (err.status !== 409) {
+          toast(err.message, 'error');
+        }
+      }
     }
 
     // ── Posts ──
@@ -1188,8 +1220,8 @@
           ${videoUrl ? `
           <div class="form-group">
             <label>Video</label>
-            <video controls style="width:100%;max-height:400px;border-radius:8px;background:#000" src="${videoUrl}"></video>
-            <a href="${videoUrl}" download style="display:inline-block;margin-top:8px;font-size:0.8rem;color:var(--accent-dim)">Videoyu indir</a>
+            <video controls style="width:100%;max-height:400px;border-radius:8px;background:#000" src="${esc(videoUrl)}"></video>
+            <a href="${esc(videoUrl)}" download style="display:inline-block;margin-top:8px;font-size:0.8rem;color:var(--accent-dim)">Videoyu indir</a>
           </div>` : ''}
           <div class="form-group">
             <label>Platform</label>
@@ -1204,8 +1236,21 @@
             <label>Hashtagler</label>
             <input id="vp-hashtags" value="${esc(hashtags)}">
           </div>
+          ${post.errorMessage ? `
+          <div class="form-group">
+            <label>Hata</label>
+            <div class="preview-box" style="color:#f87171">${esc(post.errorMessage)}</div>
+          </div>` : ''}
+          ${post.platformUrl ? `
+          <div class="form-group">
+            <a href="${esc(post.platformUrl)}" target="_blank" rel="noopener noreferrer" style="font-size:0.8rem;color:var(--accent-dim)">Platformda goruntule ↗</a>
+          </div>` : ''}
           <div class="form-group" style="color:var(--text-muted);font-size:0.8rem">
-            Tur: ${post.contentType} · Ton: ${post.tone || '-'} · ${new Date(post.createdAt).toLocaleString('tr-TR')}
+            Tur: ${esc(post.contentType)} · Ton: ${esc(post.tone || '-')}
+            ${post.qualityScore != null ? ` · Kalite: ${post.qualityScore}/100` : ''}
+            ${post.safetyScore != null ? ` · Guvenlik: ${post.safetyScore}/100` : ''}
+            ${post.analytics ? ` · ❤️ ${post.analytics.likes} · 💬 ${post.analytics.comments} · 👁️ ${post.analytics.impressions}` : ''}
+            · ${new Date(post.createdAt).toLocaleString('tr-TR')}
           </div>`;
         const actions = [];
         if (post.status === 'review') {
@@ -1266,7 +1311,7 @@
         <div class="form-group">
           <label>Proje</label>
           <select id="gf-project" onchange="onGenerateProjectChange()">
-            ${projects.map(p => `<option value="${p.id}" data-config='${JSON.stringify(p.config||{})}'>${p.name}</option>`).join('')}
+            ${projects.map(p => `<option value="${p.id}" data-config="${esc(JSON.stringify(p.config||{}))}">${esc(p.name)}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">

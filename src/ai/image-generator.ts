@@ -5,15 +5,13 @@ import { logger } from '../config/logger.js';
 import { withRetry } from '../core/retry.js';
 import * as fs from 'fs';
 import * as path from 'path';
-
-const TEMP_DIR = path.resolve('temp');
+import { randomUUID } from 'crypto';
+import { TEMP_DIR, ensureDir } from '../core/media.js';
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
 function ensureTempDir(): void {
-  if (!fs.existsSync(TEMP_DIR)) {
-    fs.mkdirSync(TEMP_DIR, { recursive: true });
-  }
+  ensureDir(TEMP_DIR);
 }
 
 /**
@@ -31,7 +29,7 @@ export async function generateImage(prompt: string, _width = 1024, _height = 102
     else if (ratio < 0.7) aspectRatio = '9:16';
 
     const response = await ai.models.generateImages({
-      model: 'imagen-4.0-generate-001',
+      model: env.GEMINI_IMAGE_MODEL,
       prompt,
       config: {
         numberOfImages: 1,
@@ -46,7 +44,7 @@ export async function generateImage(prompt: string, _width = 1024, _height = 102
       throw new Error(reason ? `Image blocked by safety filter: ${reason}` : 'No image data returned from Imagen');
     }
 
-    const filename = `imagen_${Date.now()}.png`;
+    const filename = `imagen_${randomUUID()}.png`;
     const filePath = path.join(TEMP_DIR, filename);
     fs.writeFileSync(filePath, Buffer.from(imageData, 'base64'));
 
@@ -68,7 +66,7 @@ export async function searchPexelsImage(query: string, count = 1): Promise<strin
   const client = createClient(env.PEXELS_API_KEY);
 
   return withRetry(async () => {
-    const result = await client.photos.search({ query, per_page: count, locale: 'tr-TR' });
+    const result = await client.photos.search({ query, per_page: count });
 
     if ('error' in result) {
       throw new Error(`Pexels error: ${String(result.error)}`);
@@ -83,7 +81,7 @@ export async function searchPexelsImage(query: string, count = 1): Promise<strin
       if (!response.ok) continue;
 
       const buffer = Buffer.from(await response.arrayBuffer());
-      const filename = `pexels_${photo.id}_${Date.now()}.jpg`;
+      const filename = `pexels_${photo.id}_${randomUUID()}.jpg`;
       const filePath = path.join(TEMP_DIR, filename);
       fs.writeFileSync(filePath, buffer);
       filePaths.push(filePath);

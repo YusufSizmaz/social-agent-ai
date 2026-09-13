@@ -9,6 +9,7 @@ import {
   real,
   jsonb,
   boolean,
+  index,
 } from 'drizzle-orm/pg-core';
 import type { AccountStrategy } from '../../types/index.js';
 
@@ -69,7 +70,11 @@ export const posts = pgTable('posts', {
   publishedAt: timestamp('published_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  index('posts_project_created_idx').on(t.projectId, t.createdAt),
+  index('posts_account_created_idx').on(t.accountId, t.createdAt),
+  index('posts_status_idx').on(t.status),
+]);
 
 export const postAnalytics = pgTable('post_analytics', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -81,7 +86,9 @@ export const postAnalytics = pgTable('post_analytics', {
   reach: integer('reach').notNull().default(0),
   engagementRate: real('engagement_rate').notNull().default(0),
   fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  index('post_analytics_post_fetched_idx').on(t.postId, t.fetchedAt.desc()),
+]);
 
 export const jobQueue = pgTable('job_queue', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -97,7 +104,9 @@ export const jobQueue = pgTable('job_queue', {
   startedAt: timestamp('started_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  index('job_queue_dequeue_idx').on(t.status, t.priority, t.createdAt),
+]);
 
 export const logs = pgTable('logs', {
   id: uuid('id').primaryKey().defaultRandom(),

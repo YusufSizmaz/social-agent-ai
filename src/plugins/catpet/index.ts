@@ -77,6 +77,7 @@ export class CatpetPlugin implements ProjectPlugin {
     }
 
     return {
+      // Resolved by name — create a project called "CatPet" in the dashboard
       projectId: 'catpet',
       platform,
       contentType,

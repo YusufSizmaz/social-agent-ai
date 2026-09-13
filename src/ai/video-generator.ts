@@ -1,15 +1,65 @@
 import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { logger } from '../config/logger.js';
 import ffmpegLib from 'fluent-ffmpeg';
-
-const TEMP_DIR = path.resolve('temp');
+import { TEMP_DIR, ensureDir } from '../core/media.js';
 
 function ensureTempDir(): void {
-  if (!fs.existsSync(TEMP_DIR)) {
-    fs.mkdirSync(TEMP_DIR, { recursive: true });
+  ensureDir(TEMP_DIR);
+}
+
+const FONT_CANDIDATES = [
+  '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf', // Debian/Ubuntu (fonts-liberation, used in Docker)
+  '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+  '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf', // Arch
+  '/System/Library/Fonts/Helvetica.ttc', // macOS
+  'C:/Windows/Fonts/arialbd.ttf', // Windows
+];
+
+let cachedFont: string | null | undefined;
+
+/** First bold sans-serif font available on this machine, or null to let FFmpeg/fontconfig decide */
+function findFont(): string | null {
+  if (cachedFont === undefined) {
+    cachedFont = FONT_CANDIDATES.find((f) => fs.existsSync(f)) ?? null;
   }
+  return cachedFont;
+}
+
+/** Escapes a value for use inside a single-quoted FFmpeg filter argument */
+export function escapeFilterValue(value: string): string {
+  return value.replace(/\\/g, '/').replace(/'/g, "'\\''").replace(/:/g, '\\:');
+}
+
+/** Removes characters libass would interpret as override tags or line breaks */
+export function escapeAssText(text: string): string {
+  return text
+    .replace(/\\/g, '/')
+    .replace(/\{/g, '(')
+    .replace(/\}/g, ')')
+    .replace(/\s*\r?\n\s*/g, ' ');
+}
+
+/** Splits text into subtitle-sized chunks (sentences, long sentences split every 8 words) */
+export function buildSubtitleChunks(text: string): string[] {
+  const sentences = text.match(/[^.!?]+[.!?]*/g) ?? [text];
+  const chunks: string[] = [];
+
+  for (const sentence of sentences) {
+    const words = sentence.trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) continue;
+    if (words.length <= 10) {
+      chunks.push(words.join(' '));
+    } else {
+      for (let i = 0; i < words.length; i += 8) {
+        chunks.push(words.slice(i, i + 8).join(' '));
+      }
+    }
+  }
+
+  return chunks;
 }
 
 interface VideoOptions {
@@ -49,22 +99,10 @@ function getAudioDuration(audioPath: string): Promise<number> {
  * FFmpeg force_style escaping issues.
  */
 function generateASS(text: string, totalDuration: number, outputPath: string, width: number, height: number): void {
-  const sentences = text.match(/[^.!?]+[.!?]*/g) ?? [text];
-  const chunks: string[] = [];
-
-  for (const sentence of sentences) {
-    const words = sentence.trim().split(/\s+/);
-    if (words.length <= 10) {
-      chunks.push(sentence.trim());
-    } else {
-      for (let i = 0; i < words.length; i += 8) {
-        chunks.push(words.slice(i, i + 8).join(' '));
-      }
-    }
-  }
+  const chunks = buildSubtitleChunks(escapeAssText(text));
 
   // Duration proportional to word count for natural pacing
-  const totalWords = chunks.reduce((sum, c) => sum + c.split(/\s+/).length, 0);
+  const totalWords = Math.max(1, chunks.reduce((sum, c) => sum + c.split(/\s+/).length, 0));
   const secPerWord = totalDuration / totalWords;
   const marginV = Math.round(height * 0.12);
   const fontSize = Math.round(width * 0.058);
@@ -130,7 +168,7 @@ export async function generateVideo(options: VideoOptions): Promise<string> {
   const {
     imagePath,
     audioPath,
-    outputFilename = `video_${Date.now()}.mp4`,
+    outputFilename = `video_${randomUUID()}.mp4`,
     text,
     width = 1080,
     height = 1920,
@@ -158,7 +196,7 @@ export async function generateVideo(options: VideoOptions): Promise<string> {
 
   if (hasBgMusic) {
     const bgVol = options.bgMusicVolume ?? 0.6;
-    finalAudioPath = path.join(TEMP_DIR, `mix_${Date.now()}.m4a`);
+    finalAudioPath = path.join(TEMP_DIR, `mix_${randomUUID()}.m4a`);
     logger.debug('Mixing background music', { bgMusicPath: options.bgMusicPath, volume: bgVol });
 
     const fadeOutStart = Math.max(0, audioDuration - 2);
@@ -182,7 +220,7 @@ export async function generateVideo(options: VideoOptions): Promise<string> {
   const hasSubtitles = !!(displayText && displayText.length > 0);
   const hasLogo = !!(options.logoPath && fs.existsSync(options.logoPath));
   const needsStep2 = hasSubtitles || hasLogo;
-  const step1Output = needsStep2 ? path.join(TEMP_DIR, `kb_${Date.now()}.mp4`) : outputPath;
+  const step1Output = needsStep2 ? path.join(TEMP_DIR, `kb_${randomUUID()}.mp4`) : outputPath;
 
   logger.debug('FFmpeg step 1: Ken Burns', { duration: totalDuration, frames: totalFrames });
 
@@ -208,11 +246,10 @@ export async function generateVideo(options: VideoOptions): Promise<string> {
 
     // Subtitles (use displayText for correct on-screen text)
     if (hasSubtitles) {
-      const assPath = path.join(TEMP_DIR, `subs_${Date.now()}.ass`);
+      const assPath = path.join(TEMP_DIR, `subs_${randomUUID()}.ass`);
       generateASS(displayText!, audioDuration, assPath, width, height);
       tempFiles.push(assPath);
-      const escapedAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      filterComplex += `[${lastLabel}]ass=${escapedAss}[sub];`;
+      filterComplex += `[${lastLabel}]ass='${escapeFilterValue(assPath)}'[sub];`;
       lastLabel = 'sub';
     }
 
@@ -228,8 +265,9 @@ export async function generateVideo(options: VideoOptions): Promise<string> {
         const nameSize = Math.round(width * 0.028);
         const nameY = logoPad + logoSize + Math.round(width * 0.012);
         const nameCenterX = logoPad + Math.round(logoSize / 2);
-        const escapedName = options.projectName.replace(/'/g, "'\\''").replace(/:/g, '\\:');
-        filterComplex += `;[withlogo]drawtext=text='${escapedName}':fontfile=/System/Library/Fonts/Helvetica.ttc:fontsize=${nameSize}:fontcolor=white:x=${nameCenterX}-text_w/2:y=${nameY}:shadowcolor=black@0.6:shadowx=1:shadowy=1[out]`;
+        const font = findFont();
+        const fontArg = font ? `:fontfile='${escapeFilterValue(font)}'` : '';
+        filterComplex += `;[withlogo]drawtext=text='${escapeFilterValue(options.projectName)}'${fontArg}:fontsize=${nameSize}:fontcolor=white:x=${nameCenterX}-text_w/2:y=${nameY}:shadowcolor=black@0.6:shadowx=1:shadowy=1[out]`;
       } else {
         filterComplex = filterComplex.replace(/\[withlogo\]$/, '[out]');
       }

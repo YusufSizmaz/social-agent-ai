@@ -2,6 +2,8 @@ import { logger } from './config/logger.js';
 import { env } from './config/env.js';
 import { engine } from './core/engine.js';
 import { startServer } from './server/index.js';
+import { checkDatabaseConnection, closeDb, runMigrations } from './db/index.js';
+import { errorMessage } from './core/errors.js';
 import { TwitterAdapter } from './platforms/twitter/index.js';
 import { InstagramAdapter } from './platforms/instagram/index.js';
 import { YouTubeAdapter } from './platforms/youtube/index.js';
@@ -10,6 +12,7 @@ import { CatpetPlugin } from './plugins/catpet/index.js';
 import { initWhatsApp, destroyWhatsApp } from './notifications/whatsapp.js';
 
 function registerAdapters(): void {
+  // Twitter is always registered: accounts can carry their own credentials in the database
   engine.registerAdapter(new TwitterAdapter());
 
   if (env.INSTAGRAM_ACCESS_TOKEN) {
@@ -32,17 +35,41 @@ function registerPlugins(): void {
 }
 
 async function main(): Promise<void> {
-  logger.info('Social Media Bot starting...');
+  logger.info('Social Agent AI starting...');
 
+  const dbReady = await checkDatabaseConnection();
+
+  if (env.RUN_MIGRATIONS && dbReady) {
+    logger.info('Applying database migrations...');
+    await runMigrations();
+  }
+
+  const server = startServer();
+
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info(`Received ${signal}, shutting down gracefully...`);
-    await engine.stop();
-    await destroyWhatsApp();
+
+    const forceExit = setTimeout(() => {
+      logger.error('Graceful shutdown timed out, forcing exit');
+      process.exit(1);
+    }, 90_000);
+    forceExit.unref();
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await engine.stop().catch((err) => logger.error('Engine stop failed', { error: String(err) }));
+    await destroyWhatsApp().catch(() => {});
+    await closeDb().catch(() => {});
     process.exit(0);
   };
 
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled promise rejection', { error: reason instanceof Error ? reason.stack : String(reason) });
+  });
 
   // Initialize WhatsApp (non-blocking — bot works without it)
   initWhatsApp().catch((err) => {
@@ -54,19 +81,15 @@ async function main(): Promise<void> {
   registerAdapters();
   registerPlugins();
 
-  startServer();
-
   try {
     await engine.start();
-    logger.info('Social Media Bot is running');
+    logger.info('Social Agent AI is running');
   } catch (err) {
-    logger.error('Engine start failed, web panel is still available', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    logger.error('Engine start failed, web panel is still available', { error: errorMessage(err) });
   }
 }
 
 main().catch((err) => {
-  console.error('Fatal error:', err);
+  logger.error('Fatal error during startup', { error: err instanceof Error ? err.stack : String(err) });
   process.exit(1);
 });

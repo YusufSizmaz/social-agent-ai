@@ -1,22 +1,44 @@
-import { eq, and, ne, gte, sql, isNotNull } from 'drizzle-orm';
+import { eq, and, ne, gte, sql, isNotNull, asc } from 'drizzle-orm';
 import { Platform, ContentType, QUEUE_POLL_INTERVAL_MS, JobType } from '../config/constants.js';
 import { logger } from '../config/logger.js';
 import type { PlatformAdapter, ProjectPlugin, ContentRequest, GeneratedContent, AccountStrategy } from '../types/index.js';
-import { dequeueJob, completeJob, failJob, enqueueJob } from './queue.js';
+import { dequeueJob, completeJob, failJob, enqueueJob, recoverStaleJobs, type Job } from './queue.js';
 import { startAllCrons, stopAllCrons, registerCron } from './scheduler.js';
 import { syncAccountCrons } from './account-scheduler.js';
 import { generateText } from '../ai/text-generator.js';
+import { createContent, failsQualityGate, type CreatedContent } from './content-service.js';
+import { checkContentSafety, fitToPlatform } from './safety-guard.js';
+import { pickContentAction, mergeHashtags } from './content-mix.js';
+import { NonRetryableError, errorMessage, isRetryable } from './errors.js';
 import { db, schema } from '../db/index.js';
 import { notifyPostPublished, notifyPostFailed, notifyContentGenerated, notifyDailySummary } from '../notifications/whatsapp.js';
 import { trackAllPublishedPosts, trackPostAnalytics } from '../analytics/tracker.js';
 import { generateReport } from '../analytics/reporter.js';
 import { optimizeStrategies } from './strategy-optimizer.js';
 
+type PlatformValue = typeof schema.posts.$inferInsert['platform'];
+type ContentTypeValue = typeof schema.posts.$inferInsert['contentType'];
+type ToneValue = NonNullable<typeof schema.posts.$inferInsert['tone']>;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SHUTDOWN_GRACE_MS = 60_000;
+
+interface NewPost {
+  projectId: string;
+  accountId: string;
+  platform: Platform;
+  contentType: ContentType;
+  tone: ToneValue;
+  content: CreatedContent;
+  source: string;
+}
+
 export class Engine {
   private adapters = new Map<Platform, PlatformAdapter>();
   private plugins = new Map<string, ProjectPlugin>();
   private running = false;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private inFlight: Promise<void> | null = null;
 
   registerAdapter(adapter: PlatformAdapter): void {
     this.adapters.set(adapter.platform, adapter);
@@ -36,27 +58,45 @@ export class Engine {
     return this.plugins.get(name);
   }
 
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  /** Lets adapters drop cached API clients after an account's credentials change */
+  invalidateAccount(accountId: string): void {
+    for (const adapter of this.adapters.values()) {
+      adapter.invalidateAccount?.(accountId);
+    }
+  }
+
   async start(): Promise<void> {
     logger.info('Engine starting...');
+
+    await recoverStaleJobs();
 
     for (const adapter of this.adapters.values()) {
       await adapter.init();
     }
 
     for (const plugin of this.plugins.values()) {
-      await plugin.init();
+      try {
+        await plugin.init();
+      } catch (err) {
+        logger.error(`Plugin "${plugin.name}" failed to initialize`, { error: errorMessage(err) });
+      }
     }
 
     registerCron('poll-plugins', '*/5 * * * *', () => this.pollPlugins());
     registerCron('track-analytics', '0 */6 * * *', async () => { await trackAllPublishedPosts(); });
     registerCron('daily-report', '0 23 * * *', () => this.sendDailyReport());
     registerCron('optimize-strategies', '0 2 * * 1', () => optimizeStrategies());
+    registerCron('recover-stale-jobs', '*/10 * * * *', async () => { await recoverStaleJobs(); });
 
     await syncAccountCrons();
 
     startAllCrons();
-    this.startJobPolling();
     this.running = true;
+    this.startJobPolling();
 
     logger.info('Engine started successfully', {
       adapters: [...this.adapters.keys()],
@@ -69,11 +109,19 @@ export class Engine {
     this.running = false;
 
     if (this.pollTimer) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
 
     stopAllCrons();
+
+    if (this.inFlight) {
+      logger.info('Waiting for the current job to finish...');
+      await Promise.race([
+        this.inFlight,
+        new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS)),
+      ]);
+    }
 
     for (const plugin of this.plugins.values()) {
       await plugin.destroy();
@@ -86,19 +134,32 @@ export class Engine {
     logger.info('Engine stopped');
   }
 
+  /** Drains the queue, then waits for the poll interval. Never runs two polls at once. */
   private startJobPolling(): void {
-    this.pollTimer = setInterval(() => {
-      if (this.running) {
-        this.processNextJob().catch((err) => {
-          logger.error('Job processing error', { error: err instanceof Error ? err.message : String(err) });
-        });
+    const tick = async (): Promise<void> => {
+      try {
+        while (this.running) {
+          const run = this.processNextJob();
+          this.inFlight = run.then(() => undefined, () => undefined);
+          const processed = await run;
+          if (!processed) break;
+        }
+      } catch (err) {
+        logger.error('Job processing error', { error: errorMessage(err) });
+      } finally {
+        this.inFlight = null;
+        if (this.running) {
+          this.pollTimer = setTimeout(() => void tick(), QUEUE_POLL_INTERVAL_MS);
+        }
       }
-    }, QUEUE_POLL_INTERVAL_MS);
+    };
+
+    this.pollTimer = setTimeout(() => void tick(), 0);
   }
 
-  private async processNextJob(): Promise<void> {
+  private async processNextJob(): Promise<boolean> {
     const job = await dequeueJob();
-    if (!job) return;
+    if (!job) return false;
 
     logger.info(`Processing job ${job.id} (${job.type})`, { attempt: job.attempts });
 
@@ -108,7 +169,7 @@ export class Engine {
           await this.handleGenerateContent(job.payload);
           break;
         case JobType.PUBLISH_POST:
-          await this.handlePublishPost(job.payload);
+          await this.handlePublishPost(job);
           break;
         case JobType.FETCH_ANALYTICS:
           await this.handleFetchAnalytics(job.payload);
@@ -117,18 +178,22 @@ export class Engine {
           await this.pollPlugins();
           break;
         default:
-          logger.warn(`Unknown job type: ${job.type}`);
+          throw new NonRetryableError(`Unknown job type: ${job.type}`);
       }
       await completeJob(job.id);
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      const canRetry = job.attempts < job.maxAttempts;
-      await failJob(job.id, errorMsg, canRetry);
+      const message = errorMessage(err);
+      const canRetry = isRetryable(err) && job.attempts < job.maxAttempts;
+      await failJob(job.id, message, canRetry, job.attempts);
 
-      if (!canRetry) {
-        logger.error(`Job ${job.id} permanently failed`, { error: errorMsg });
+      if (canRetry) {
+        logger.warn(`Job ${job.id} failed, will retry`, { error: message, attempt: job.attempts });
+      } else {
+        logger.error(`Job ${job.id} permanently failed`, { error: message });
       }
     }
+
+    return true;
   }
 
   private async pollPlugins(): Promise<void> {
@@ -145,54 +210,154 @@ export class Engine {
           logger.info(`Plugin "${plugin.name}" produced ${requests.length} content requests`);
         }
       } catch (err) {
-        logger.error(`Plugin "${plugin.name}" poll failed`, {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        logger.error(`Plugin "${plugin.name}" poll failed`, { error: errorMessage(err) });
       }
     }
   }
 
   private async handleGenerateContent(payload: Record<string, unknown>): Promise<void> {
-    // Account-strategy-based generation
     if (payload['strategy'] && payload['accountId']) {
       await this.handleStrategyGeneration(payload);
       return;
     }
 
-    // Plugin-based generation (legacy path)
     const pluginName = payload['pluginName'] as string;
     const request = payload['request'] as ContentRequest;
     const plugin = this.plugins.get(pluginName);
 
     if (!plugin) {
-      throw new Error(`Plugin not found: ${pluginName}`);
+      throw new NonRetryableError(`Plugin not found: ${pluginName}`);
     }
 
-    const content = await generateText(request);
+    const target = await this.resolveTarget(request.projectId, request.platform, payload['accountId'] as string | undefined);
+    if (!target) return;
 
-    const [post] = await db
+    const prompt = request.prompt?.trim() ? request.prompt : plugin.getPrompt(request);
+    const resolvedRequest: ContentRequest = {
+      ...request,
+      projectId: target.projectId,
+      prompt,
+      context: { ...request.context, projectConfig: target.projectConfig, projectName: target.projectName },
+    };
+
+    let content = await createContent(resolvedRequest);
+    if (plugin.transform) {
+      const transformed = fitToPlatform(plugin.transform({ ...content, hashtags: [...content.hashtags] }), request.platform);
+      content = {
+        ...content,
+        text: transformed.text,
+        hashtags: transformed.hashtags,
+        mediaUrls: transformed.mediaUrls ?? content.mediaUrls,
+      };
+    }
+
+    await this.saveAndQueue({
+      projectId: target.projectId,
+      accountId: target.accountId,
+      platform: request.platform,
+      contentType: request.contentType,
+      tone: request.tone as ToneValue,
+      content,
+      source: `plugin:${plugin.name}`,
+    });
+  }
+
+  /**
+   * Resolves a plugin's project reference (UUID or name) and picks the account to post with.
+   * Returns null — skipping the request — when the project has no active account for the platform.
+   */
+  private async resolveTarget(projectRef: string, platform: Platform, accountId?: string) {
+    const [project] = await db
+      .select({ id: schema.projects.id, name: schema.projects.name, config: schema.projects.config })
+      .from(schema.projects)
+      .where(UUID_RE.test(projectRef)
+        ? eq(schema.projects.id, projectRef)
+        : sql`lower(${schema.projects.name}) = lower(${projectRef})`)
+      .limit(1);
+
+    if (!project) {
+      throw new NonRetryableError(`Project "${projectRef}" not found — create it in the dashboard first`);
+    }
+
+    const [account] = await db
+      .select({ id: schema.accounts.id })
+      .from(schema.accounts)
+      .where(accountId
+        ? and(eq(schema.accounts.id, accountId), eq(schema.accounts.projectId, project.id))
+        : and(
+            eq(schema.accounts.projectId, project.id),
+            eq(schema.accounts.platform, platform as PlatformValue),
+            eq(schema.accounts.active, true),
+          ))
+      .orderBy(asc(schema.accounts.role))
+      .limit(1);
+
+    if (!account) {
+      logger.warn(`No active ${platform} account for project "${project.name}", skipping content request`);
+      return null;
+    }
+
+    return {
+      projectId: project.id,
+      projectName: project.name,
+      projectConfig: project.config ?? {},
+      accountId: account.id,
+    };
+  }
+
+  /** Stores generated content and queues it for publishing — or holds it for review if it fails the quality gate */
+  private async saveAndQueue(post: NewPost): Promise<string> {
+    const holdForReview = failsQualityGate(post.content);
+
+    const [created] = await db
       .insert(schema.posts)
       .values({
-        projectId: request.projectId,
-        accountId: (payload['accountId'] as string) || request.projectId,
-        platform: request.platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok',
-        contentType: request.contentType as 'text' | 'image' | 'video' | 'story' | 'reel' | 'short',
-        text: content.text,
-        hashtags: content.hashtags,
-        mediaUrls: content.mediaUrls ?? [],
-        status: 'publishing',
-        tone: request.tone as 'emotional' | 'informative' | 'urgent' | 'hopeful' | 'friendly',
+        projectId: post.projectId,
+        accountId: post.accountId,
+        platform: post.platform as PlatformValue,
+        contentType: post.contentType as ContentTypeValue,
+        text: post.content.text,
+        hashtags: post.content.hashtags,
+        mediaUrls: post.content.mediaUrls,
+        status: holdForReview ? 'review' : 'publishing',
+        tone: post.tone,
+        qualityScore: post.content.qualityScore,
+        metadata: {
+          source: post.source,
+          ...(post.content.qualityFeedback ? { qualityFeedback: post.content.qualityFeedback } : {}),
+        },
       })
-      .returning();
+      .returning({ id: schema.posts.id });
 
-    logger.info(`Content generated for plugin ${pluginName}`, { postId: post!.id });
+    const postId = created!.id;
+    const username = await this.getAccountUsername(post.accountId);
+
+    logger.info(`Content generated (${post.source})`, {
+      postId,
+      accountId: post.accountId,
+      contentType: post.contentType,
+      heldForReview: holdForReview,
+    });
+
+    await notifyContentGenerated({
+      username,
+      platform: post.platform,
+      contentType: post.contentType,
+      text: post.content.text,
+    });
+
+    if (holdForReview) {
+      logger.warn(`Post ${postId} scored ${post.content.qualityScore} and was held for manual review`);
+      return postId;
+    }
 
     await enqueueJob(JobType.PUBLISH_POST, {
-      postId: post!.id,
-      platform: request.platform,
-      accountId: payload['accountId'] as string,
-      content,
+      postId,
+      platform: post.platform,
+      accountId: post.accountId,
     });
+
+    return postId;
   }
 
   private async handleStrategyGeneration(payload: Record<string, unknown>): Promise<void> {
@@ -201,102 +366,58 @@ export class Engine {
     const platform = payload['platform'] as Platform;
     const strategy = payload['strategy'] as AccountStrategy;
 
-    // Determine content action based on contentMix percentages
-    const roll = Math.random() * 100;
-    const { original, repost } = strategy.contentMix;
-    let action: 'original' | 'repost' | 'reply';
-    if (roll < original) {
-      action = 'original';
-    } else if (roll < original + repost) {
-      action = 'repost';
-    } else {
-      action = 'reply';
-    }
+    const action = pickContentAction(strategy.contentMix, Math.random());
 
-    // Handle repost action
     if (action === 'repost') {
       await this.handleRepost(accountId, projectId, platform);
       return;
     }
 
-    // Handle reply action
     if (action === 'reply') {
       await this.handleReply(accountId, projectId, platform, strategy);
       return;
     }
 
-    // Pick a random content type from strategy
-    const contentType = strategy.contentTypes[Math.floor(Math.random() * strategy.contentTypes.length)]!;
+    const contentTypes = strategy.contentTypes?.length ? strategy.contentTypes : [ContentType.TEXT];
+    const contentType = contentTypes[Math.floor(Math.random() * contentTypes.length)]!;
 
-    const langInstruction = strategy.language === 'tr'
-      ? 'Yaniti mutlaka Turkce yaz.'
-      : strategy.language === 'en'
-        ? 'Write the response in English.'
-        : '';
+    const [project] = await db
+      .select({ name: schema.projects.name, config: schema.projects.config })
+      .from(schema.projects)
+      .where(eq(schema.projects.id, projectId))
+      .limit(1);
 
-    const hashtagInstruction = strategy.hashtags?.length
-      ? `Su hashtag\'leri mutlaka kullan: ${strategy.hashtags.join(' ')}`
-      : '';
+    const prompt = [
+      strategy.promptTemplate,
+      strategy.hashtags?.length ? `Include these hashtags: ${strategy.hashtags.join(' ')}` : '',
+    ].filter(Boolean).join('\n');
 
-    const prompt = [strategy.promptTemplate, langInstruction, hashtagInstruction]
-      .filter(Boolean)
-      .join('\n');
-
-    const request: ContentRequest = {
+    const content = await createContent({
       projectId,
       platform,
-      contentType: contentType as ContentRequest['contentType'],
+      contentType,
       tone: strategy.tone,
       prompt,
-    };
-
-    const content = await generateText(request);
-
-    // Merge strategy hashtags with generated ones
-    if (strategy.hashtags?.length) {
-      const existing = new Set(content.hashtags.map(h => h.toLowerCase()));
-      for (const tag of strategy.hashtags) {
-        if (!existing.has(tag.toLowerCase())) {
-          content.hashtags.push(tag);
-        }
-      }
-    }
-
-    const [post] = await db
-      .insert(schema.posts)
-      .values({
-        projectId,
-        accountId,
-        platform: platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok',
-        contentType: contentType as 'text' | 'image' | 'video' | 'story' | 'reel' | 'short',
-        text: content.text,
-        hashtags: content.hashtags,
-        mediaUrls: content.mediaUrls ?? [],
-        status: 'publishing',
-        tone: strategy.tone as 'emotional' | 'informative' | 'urgent' | 'hopeful' | 'friendly',
-      })
-      .returning();
-
-    const username = await this.getAccountUsername(accountId);
-
-    logger.info(`Strategy content generated for account ${accountId}`, {
-      postId: post!.id,
-      action,
-      contentType,
+      context: {
+        language: strategy.language,
+        projectConfig: project?.config ?? {},
+        projectName: project?.name,
+      },
     });
 
-    await notifyContentGenerated({
-      username,
+    const merged = fitToPlatform(
+      { ...content, hashtags: mergeHashtags(strategy.hashtags, content.hashtags) },
       platform,
-      contentType,
-      text: content.text,
-    });
+    );
 
-    await enqueueJob(JobType.PUBLISH_POST, {
-      postId: post!.id,
-      platform,
+    await this.saveAndQueue({
+      projectId,
       accountId,
-      content,
+      platform,
+      contentType,
+      tone: strategy.tone as ToneValue,
+      content: { ...content, hashtags: merged.hashtags },
+      source: 'strategy',
     });
   }
 
@@ -318,11 +439,12 @@ export class Engine {
       .where(
         and(
           eq(schema.posts.projectId, projectId),
-          eq(schema.posts.platform, platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok'),
+          eq(schema.posts.platform, platform as PlatformValue),
           eq(schema.posts.status, 'published'),
           ne(schema.posts.accountId, accountId),
           gte(schema.posts.publishedAt, twentyFourHoursAgo),
           isNotNull(schema.posts.platformPostId),
+          sql`NOT (COALESCE(${schema.posts.metadata}, '{}'::jsonb) ? 'repostOf')`,
         ),
       );
   }
@@ -374,7 +496,7 @@ export class Engine {
       await db.insert(schema.posts).values({
         projectId,
         accountId,
-        platform: platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok',
+        platform: platform as PlatformValue,
         contentType: 'text',
         text: `[RT] ${(target.text || '').substring(0, 100)}`,
         hashtags: [],
@@ -382,7 +504,7 @@ export class Engine {
         status: 'published',
         publishedAt: new Date(),
         platformPostId: target.platformPostId,
-        metadata: { repostOf: target.id },
+        metadata: { repostOf: target.id, source: 'strategy' },
       });
 
       const username = await this.getAccountUsername(accountId);
@@ -423,29 +545,27 @@ export class Engine {
       return;
     }
 
-    const langInstruction = strategy.language === 'tr'
-      ? 'Yaniti mutlaka Turkce yaz.'
-      : strategy.language === 'en'
-        ? 'Write the response in English.'
-        : '';
-
     const replyPrompt = [
       strategy.promptTemplate,
-      `Bu posta kisa destekleyici bir yorum yaz: "${(target.text || '').substring(0, 200)}"`,
-      'Yanitini 1-2 cumle ile sinirla. Samimi ve dogal ol.',
-      langInstruction,
+      `Write a short, supportive reply to this post: "${(target.text || '').substring(0, 200)}"`,
+      'Keep it to 1-2 sentences. Be genuine and natural. Do not use hashtags.',
     ].filter(Boolean).join('\n');
 
-    const request: ContentRequest = {
+    const generated = await generateText({
       projectId,
       platform,
       contentType: ContentType.TEXT,
       tone: strategy.tone,
       prompt: replyPrompt,
-    };
-
-    const generated = await generateText(request);
+      context: { language: strategy.language },
+    });
     const replyText = generated.text;
+
+    const safety = checkContentSafety({ text: replyText, hashtags: [] }, platform);
+    if (!safety.safe) {
+      logger.warn(`Generated reply failed safety check, skipping`, { reasons: safety.reasons });
+      return;
+    }
 
     const result = await adapter.reply(target.platformPostId!, replyText, accountId);
 
@@ -453,7 +573,7 @@ export class Engine {
       await db.insert(schema.posts).values({
         projectId,
         accountId,
-        platform: platform as 'twitter' | 'instagram' | 'youtube' | 'tiktok',
+        platform: platform as PlatformValue,
         contentType: 'text',
         text: replyText,
         hashtags: [],
@@ -462,7 +582,8 @@ export class Engine {
         publishedAt: new Date(),
         platformPostId: result.platformPostId,
         platformUrl: result.url,
-        metadata: { replyTo: target.id },
+        safetyScore: safety.score,
+        metadata: { replyTo: target.id, source: 'strategy' },
       });
 
       const username = await this.getAccountUsername(accountId);
@@ -489,83 +610,102 @@ export class Engine {
     return acc?.username ?? accountId;
   }
 
-  private async handlePublishPost(payload: Record<string, unknown>): Promise<void> {
+  private async handlePublishPost(job: Job): Promise<void> {
+    const { payload } = job;
     const platform = payload['platform'] as Platform;
     const postId = payload['postId'] as string | undefined;
-    const adapter = this.adapters.get(platform);
+    const accountId = payload['accountId'] as string;
+    const isFinalAttempt = job.attempts >= job.maxAttempts;
 
-    if (!adapter) {
-      throw new Error(`No adapter for platform: ${platform}`);
+    let content: GeneratedContent;
+    if (postId) {
+      // Always publish what's in the database, so edits made after queueing are respected
+      const [post] = await db.select().from(schema.posts).where(eq(schema.posts.id, postId)).limit(1);
+      if (!post) {
+        logger.warn(`Post ${postId} no longer exists, skipping publish`);
+        return;
+      }
+      if (post.status === 'published') {
+        logger.info(`Post ${postId} is already published, skipping`);
+        return;
+      }
+      content = { text: post.text, hashtags: post.hashtags ?? [], mediaUrls: post.mediaUrls ?? [], metadata: post.metadata ?? {} };
+    } else {
+      content = payload['content'] as GeneratedContent;
     }
 
-    const content = payload['content'] as GeneratedContent;
-    const accountId = payload['accountId'] as string;
     const username = await this.getAccountUsername(accountId);
 
+    const fail = async (message: string, final: boolean): Promise<void> => {
+      if (postId) {
+        await db
+          .update(schema.posts)
+          .set({ status: final ? 'failed' : 'publishing', errorMessage: message, updatedAt: new Date() })
+          .where(eq(schema.posts.id, postId));
+      }
+      if (final) {
+        await notifyPostFailed({ username, platform, text: content.text, error: message });
+      }
+    };
+
+    const adapter = this.adapters.get(platform);
+    if (!adapter) {
+      const message = `No adapter for platform "${platform}" — configure its credentials in .env`;
+      await fail(message, true);
+      throw new NonRetryableError(message);
+    }
+
+    content = fitToPlatform(content, platform);
+    const safety = checkContentSafety(content, platform);
+    if (postId) {
+      await db.update(schema.posts).set({ safetyScore: safety.score }).where(eq(schema.posts.id, postId));
+    }
+    if (!safety.safe) {
+      const message = `Safety check failed: ${safety.reasons.join('; ')}`;
+      await fail(message, true);
+      throw new NonRetryableError(message);
+    }
+
+    let result;
     try {
-      const result = await adapter.post(content, accountId);
-
-      if (!result.success) {
-        if (postId) {
-          await db
-            .update(schema.posts)
-            .set({ status: 'failed', errorMessage: result.error ?? 'Post failed', updatedAt: new Date() })
-            .where(eq(schema.posts.id, postId));
-        }
-        await notifyPostFailed({
-          username,
-          platform,
-          text: content.text,
-          error: result.error ?? 'Post failed',
-        });
-        throw new Error(result.error ?? 'Post failed');
-      }
-
-      if (postId) {
-        await db
-          .update(schema.posts)
-          .set({
-            status: 'published',
-            publishedAt: new Date(),
-            platformPostId: result.platformPostId ?? null,
-            platformUrl: result.url ?? null,
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.posts.id, postId));
-      }
-
-      logger.info(`Post published on ${platform}`, { postId, platformPostId: result.platformPostId });
-
-      await notifyPostPublished({
-        username,
-        platform,
-        text: content.text,
-        hashtags: content.hashtags,
-        platformUrl: result.url,
-        platformPostId: result.platformPostId,
-      });
+      result = await adapter.post(content, accountId);
     } catch (err) {
-      if (postId) {
-        await db
-          .update(schema.posts)
-          .set({
-            status: 'failed',
-            errorMessage: err instanceof Error ? err.message : String(err),
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.posts.id, postId));
-      }
-      // Only notify if we haven't already (the !result.success path above already notified)
-      if (!(err instanceof Error && err.message === 'Post failed')) {
-        await notifyPostFailed({
-          username,
-          platform,
-          text: content.text,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      await fail(errorMessage(err), isFinalAttempt || !isRetryable(err));
       throw err;
     }
+
+    if (!result.success) {
+      const message = result.error ?? 'Post failed';
+      await fail(message, isFinalAttempt);
+      throw new Error(message);
+    }
+
+    const now = new Date();
+    if (postId) {
+      await db
+        .update(schema.posts)
+        .set({
+          status: 'published',
+          publishedAt: now,
+          platformPostId: result.platformPostId ?? null,
+          platformUrl: result.url ?? null,
+          errorMessage: null,
+          updatedAt: now,
+        })
+        .where(eq(schema.posts.id, postId));
+    }
+    await db.update(schema.accounts).set({ lastUsedAt: now }).where(eq(schema.accounts.id, accountId));
+
+    logger.info(`Post published on ${platform}`, { postId, platformPostId: result.platformPostId });
+
+    await notifyPostPublished({
+      username,
+      platform,
+      text: content.text,
+      hashtags: content.hashtags,
+      platformUrl: result.url,
+      platformPostId: result.platformPostId,
+    });
   }
 
   private async sendDailyReport(): Promise<void> {
@@ -574,9 +714,7 @@ export class Engine {
       await notifyDailySummary(report);
       logger.info('Daily report sent successfully');
     } catch (err) {
-      logger.error('Failed to send daily report', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      logger.error('Failed to send daily report', { error: errorMessage(err) });
     }
   }
 
@@ -584,12 +722,12 @@ export class Engine {
     const postId = payload['postId'] as string;
 
     if (!postId) {
-      throw new Error('handleFetchAnalytics requires postId in payload');
+      throw new NonRetryableError('handleFetchAnalytics requires postId in payload');
     }
 
     const result = await trackPostAnalytics(postId);
     if (result) {
-      logger.info(`Analytics tracked for post ${postId}`, result);
+      logger.info(`Analytics tracked for post ${postId}`, { ...result });
     } else {
       logger.warn(`Could not track analytics for post ${postId}`);
     }

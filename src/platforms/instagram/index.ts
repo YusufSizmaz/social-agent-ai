@@ -3,13 +3,20 @@ import { env } from '../../config/env.js';
 import type { GeneratedContent, PlatformPostResult, PostAnalyticsData } from '../../types/index.js';
 import { BasePlatformAdapter } from '../base.js';
 import { logger } from '../../config/logger.js';
+import { composePostText } from '../../core/safety-guard.js';
+import { toAbsoluteUrl } from '../../core/media.js';
 
-interface IGMediaResponse {
+const GRAPH_URL = 'https://graph.facebook.com/v21.0';
+const CONTAINER_POLL_INTERVAL_MS = 5000;
+const CONTAINER_MAX_WAIT_MS = 5 * 60 * 1000;
+
+interface IGIdResponse {
   id: string;
 }
 
-interface IGPublishResponse {
-  id: string;
+interface IGContainerStatus {
+  status_code?: 'EXPIRED' | 'ERROR' | 'FINISHED' | 'IN_PROGRESS' | 'PUBLISHED';
+  status?: string;
 }
 
 interface IGInsightsResponse {
@@ -47,67 +54,106 @@ export class InstagramAdapter extends BasePlatformAdapter {
 
   protected async doPost(content: GeneratedContent, _accountId: string): Promise<PlatformPostResult> {
     const { token, accountId } = this.getCredentials();
-    const caption = [content.text, ...content.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`))].join(' ');
+    const caption = composePostText(content);
 
-    const imageUrl = content.mediaUrls?.[0];
-    if (!imageUrl) {
-      return { success: false, error: 'Instagram requires at least one image' };
+    const mediaUrl = content.mediaUrls?.[0];
+    if (!mediaUrl) {
+      return { success: false, error: 'Instagram requires an image or video' };
     }
 
+    const publicUrl = toAbsoluteUrl(mediaUrl, env.PUBLIC_BASE_URL);
+    if (!publicUrl) {
+      return {
+        success: false,
+        error: 'Instagram fetches media by URL — set PUBLIC_BASE_URL so locally generated media is reachable',
+      };
+    }
+
+    const isVideo = /\.(mp4|mov)(\?|$)/i.test(publicUrl);
+
     // Step 1: Create media container
-    const createRes = await fetch(
-      `https://graph.facebook.com/v21.0/${accountId}/media`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image_url: imageUrl,
-          caption,
-          access_token: token,
-        }),
-      },
-    );
+    const createRes = await fetch(`${GRAPH_URL}/${accountId}/media`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(isVideo ? { media_type: 'REELS', video_url: publicUrl } : { image_url: publicUrl }),
+        caption,
+        access_token: token,
+      }),
+    });
 
     if (!createRes.ok) {
       const err = await createRes.text();
       return { success: false, error: `Instagram create media failed: ${err}` };
     }
 
-    const { id: containerId } = (await createRes.json()) as IGMediaResponse;
+    const { id: containerId } = (await createRes.json()) as IGIdResponse;
+
+    // Videos are processed asynchronously — wait until the container is ready
+    if (isVideo) {
+      const ready = await this.waitForContainer(containerId, token);
+      if (!ready.ok) {
+        return { success: false, error: `Instagram video processing failed: ${ready.reason}` };
+      }
+    }
 
     // Step 2: Publish
-    const publishRes = await fetch(
-      `https://graph.facebook.com/v21.0/${accountId}/media_publish`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          creation_id: containerId,
-          access_token: token,
-        }),
-      },
-    );
+    const publishRes = await fetch(`${GRAPH_URL}/${accountId}/media_publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        creation_id: containerId,
+        access_token: token,
+      }),
+    });
 
     if (!publishRes.ok) {
       const err = await publishRes.text();
       return { success: false, error: `Instagram publish failed: ${err}` };
     }
 
-    const { id: postId } = (await publishRes.json()) as IGPublishResponse;
+    const { id: postId } = (await publishRes.json()) as IGIdResponse;
 
     this.log('Post published', { postId });
     return {
       success: true,
       platformPostId: postId,
-      url: `https://www.instagram.com/p/${postId}/`,
+      url: await this.getPermalink(postId, token),
     };
+  }
+
+  private async waitForContainer(containerId: string, token: string): Promise<{ ok: boolean; reason?: string }> {
+    const deadline = Date.now() + CONTAINER_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      const res = await fetch(`${GRAPH_URL}/${containerId}?fields=status_code,status&access_token=${encodeURIComponent(token)}`);
+      if (res.ok) {
+        const data = (await res.json()) as IGContainerStatus;
+        if (data.status_code === 'FINISHED') return { ok: true };
+        if (data.status_code === 'ERROR' || data.status_code === 'EXPIRED') {
+          return { ok: false, reason: data.status ?? data.status_code };
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, CONTAINER_POLL_INTERVAL_MS));
+    }
+    return { ok: false, reason: 'timed out waiting for media processing' };
+  }
+
+  private async getPermalink(mediaId: string, token: string): Promise<string | undefined> {
+    try {
+      const res = await fetch(`${GRAPH_URL}/${mediaId}?fields=permalink&access_token=${encodeURIComponent(token)}`);
+      if (!res.ok) return undefined;
+      const data = (await res.json()) as { permalink?: string };
+      return data.permalink;
+    } catch {
+      return undefined;
+    }
   }
 
   protected async doDelete(platformPostId: string, _accountId: string): Promise<boolean> {
     const { token } = this.getCredentials();
 
     const res = await fetch(
-      `https://graph.facebook.com/v21.0/${platformPostId}?access_token=${token}`,
+      `${GRAPH_URL}/${platformPostId}?access_token=${encodeURIComponent(token)}`,
       { method: 'DELETE' },
     );
 
@@ -118,7 +164,7 @@ export class InstagramAdapter extends BasePlatformAdapter {
     const { token } = this.getCredentials();
 
     const res = await fetch(
-      `https://graph.facebook.com/v21.0/${platformPostId}/insights?metric=impressions,reach,likes,comments,shares&access_token=${token}`,
+      `${GRAPH_URL}/${platformPostId}/insights?metric=impressions,reach,likes,comments,shares&access_token=${encodeURIComponent(token)}`,
     );
 
     if (!res.ok) {

@@ -1,11 +1,17 @@
 import { google, type youtube_v3 } from 'googleapis';
 import * as fs from 'fs';
-import * as path from 'path';
 import { Platform } from '../../config/constants.js';
 import { env } from '../../config/env.js';
 import type { GeneratedContent, PlatformPostResult, PostAnalyticsData } from '../../types/index.js';
 import { BasePlatformAdapter } from '../base.js';
 import { logger } from '../../config/logger.js';
+import { normalizeHashtag } from '../../core/safety-guard.js';
+import { resolveMediaFile } from '../../core/media.js';
+
+function firstSentence(text: string): string {
+  const match = text.trim().match(/^[^.!?\n]+[.!?]?/);
+  return (match?.[0] ?? text).trim();
+}
 
 export class YouTubeAdapter extends BasePlatformAdapter {
   platform = Platform.YOUTUBE as const;
@@ -40,43 +46,49 @@ export class YouTubeAdapter extends BasePlatformAdapter {
 
   protected async doPost(content: GeneratedContent, _accountId: string): Promise<PlatformPostResult> {
     const youtube = this.getClient();
-    let videoPath = content.mediaUrls?.[0];
+    const mediaUrl = content.mediaUrls?.[0];
 
-    if (!videoPath) {
+    if (!mediaUrl) {
       return { success: false, error: 'YouTube requires a video file' };
     }
 
-    // Resolve URL paths (e.g. /public/videos/xxx.mp4) to absolute filesystem paths
-    if (videoPath.startsWith('/public/')) {
-      videoPath = path.resolve(videoPath.slice(1));  // Remove leading slash → "public/videos/..."
+    let media: Awaited<ReturnType<typeof resolveMediaFile>>;
+    try {
+      media = await resolveMediaFile(mediaUrl);
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
 
-    if (!fs.existsSync(videoPath)) {
-      return { success: false, error: `Video file not found: ${videoPath}` };
+    const hashtags = content.hashtags.map(normalizeHashtag);
+    const description = [content.text, '', hashtags.join(' ')].join('\n').slice(0, 5000);
+    // YouTube rejects titles over 100 chars or containing angle brackets
+    const title = firstSentence(content.text).replace(/[<>]/g, '').slice(0, 100) || 'Untitled';
+    const language = content.metadata?.['language'];
+
+    let res;
+    try {
+      res = await youtube.videos.insert({
+        part: ['snippet', 'status'],
+        requestBody: {
+          snippet: {
+            title,
+            description,
+            tags: hashtags.map((h) => h.slice(1)),
+            categoryId: '22', // People & Blogs
+            ...(typeof language === 'string' ? { defaultLanguage: language } : {}),
+          },
+          status: {
+            privacyStatus: 'public',
+            selfDeclaredMadeForKids: false,
+          },
+        },
+        media: {
+          body: fs.createReadStream(media.filePath),
+        },
+      });
+    } finally {
+      media.cleanup();
     }
-
-    const description = [content.text, '', ...content.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`))].join('\n');
-    const title = content.text.slice(0, 100);
-
-    const res = await youtube.videos.insert({
-      part: ['snippet', 'status'],
-      requestBody: {
-        snippet: {
-          title,
-          description,
-          tags: content.hashtags.map((h) => h.replace('#', '')),
-          categoryId: '22', // People & Blogs
-          defaultLanguage: 'tr',
-        },
-        status: {
-          privacyStatus: 'public',
-          selfDeclaredMadeForKids: false,
-        },
-      },
-      media: {
-        body: fs.createReadStream(videoPath),
-      },
-    });
 
     const videoId = res.data.id;
     if (!videoId) {

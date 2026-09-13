@@ -63,14 +63,21 @@ export interface PlatformAdapter {
   uploadMedia?(filePath: string, accountId: string): Promise<string>;
   reply?(platformPostId: string, text: string, accountId: string): Promise<PlatformPostResult>;
   repost?(platformPostId: string, accountId: string): Promise<PlatformPostResult>;
+  /** Called when an account's credentials change so cached clients can be dropped */
+  invalidateAccount?(accountId: string): void;
   destroy(): Promise<void>;
 }
 
 export interface ProjectPlugin {
   name: string;
   init(): Promise<void>;
+  /**
+   * Returns new content requests. `projectId` may be a project UUID or a project name
+   * (matched case-insensitively); an active account for the platform is picked automatically.
+   */
   poll(): Promise<ContentRequest[]>;
   transform?(content: GeneratedContent): GeneratedContent;
+  /** Builds the prompt when a request's `prompt` is empty */
   getPrompt(request: ContentRequest): string;
   destroy(): Promise<void>;
 }

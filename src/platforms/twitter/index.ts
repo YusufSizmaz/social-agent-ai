@@ -6,6 +6,9 @@ import type { GeneratedContent, PlatformPostResult, PostAnalyticsData } from '..
 import { BasePlatformAdapter } from '../base.js';
 import { logger } from '../../config/logger.js';
 import { db, schema } from '../../db/index.js';
+import { composePostText } from '../../core/safety-guard.js';
+import { resolveMediaFile } from '../../core/media.js';
+import { NonRetryableError } from '../../core/errors.js';
 
 export class TwitterAdapter extends BasePlatformAdapter {
   platform = Platform.TWITTER as const;
@@ -63,20 +66,26 @@ export class TwitterAdapter extends BasePlatformAdapter {
       return this.fallbackClient;
     }
 
-    throw new Error(`No Twitter credentials found for account ${accountId} and no fallback configured`);
+    throw new NonRetryableError(
+      `No Twitter credentials for account ${accountId} — add them in the dashboard or set TWITTER_* in .env`,
+    );
   }
 
   protected async doPost(content: GeneratedContent, accountId: string): Promise<PlatformPostResult> {
     const client = await this.getClientForAccount(accountId);
-    const fullText = [content.text, ...content.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`))].join(' ');
+    const fullText = composePostText(content);
 
     type MediaIdsTuple = [string] | [string, string] | [string, string, string] | [string, string, string, string];
     let mediaIds: MediaIdsTuple | undefined;
     if (content.mediaUrls?.length) {
       const ids: string[] = [];
       for (const url of content.mediaUrls.slice(0, 4)) {
-        const mediaId = await client.v1.uploadMedia(url);
-        ids.push(mediaId);
+        const { filePath, cleanup } = await resolveMediaFile(url);
+        try {
+          ids.push(await client.v1.uploadMedia(filePath));
+        } finally {
+          cleanup();
+        }
       }
       if (ids.length > 0) {
         mediaIds = ids as MediaIdsTuple;
@@ -157,5 +166,10 @@ export class TwitterAdapter extends BasePlatformAdapter {
     const client = await this.getClientForAccount(accountId);
     const mediaId = await client.v1.uploadMedia(filePath);
     return mediaId;
+  }
+
+  /** Drops the cached client so updated credentials are picked up on the next call */
+  invalidateAccount(accountId: string): void {
+    this.clientCache.delete(accountId);
   }
 }

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gte, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { PostStatus, type Platform } from '../config/constants.js';
 import { logger } from '../config/logger.js';
@@ -46,11 +46,21 @@ export async function trackPostAnalytics(postId: string): Promise<PostAnalyticsD
   }
 }
 
+/** Posts older than this stop being tracked — engagement has settled and API quota is finite */
+const TRACKING_WINDOW_DAYS = 30;
+
 export async function trackAllPublishedPosts(): Promise<number> {
+  const since = new Date(Date.now() - TRACKING_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+
   const publishedPosts = await db
     .select({ id: schema.posts.id })
     .from(schema.posts)
-    .where(eq(schema.posts.status, PostStatus.PUBLISHED));
+    .where(and(
+      eq(schema.posts.status, PostStatus.PUBLISHED),
+      gte(schema.posts.publishedAt, since),
+      // Reposts share the original's platform id, so tracking them would duplicate its metrics
+      sql`NOT (COALESCE(${schema.posts.metadata}, '{}'::jsonb) ? 'repostOf')`,
+    ));
 
   let tracked = 0;
   for (const post of publishedPosts) {

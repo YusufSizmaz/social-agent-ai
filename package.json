@@ -1,31 +1,53 @@
 {
-  "name": "social-media-bot",
-  "version": "1.0.0",
+  "name": "social-agent-ai",
+  "version": "1.1.0",
   "description": "Open-source, self-hosted AI-powered social media automation platform with multi-platform publishing, analytics, and autonomous strategy optimization",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsx src/index.ts",
+    "build": "tsc && node -e \"require('fs').cpSync('src/server/views', 'dist/server/views', { recursive: true })\"",
+    "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.dev.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm test",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "tsx src/db/seed.ts"
+    "db:seed": "tsx scripts/seed.ts"
   },
   "keywords": [
     "social-media",
-    "automation",
-    "typescript",
-    "modular"
+    "social-media-automation",
+    "ai",
+    "gemini",
+    "twitter",
+    "instagram",
+    "youtube",
+    "tiktok",
+    "content-generation",
+    "scheduler",
+    "self-hosted",
+    "typescript"
   ],
+  "author": "Yusuf Sizmaz (https://github.com/YusufSizmaz)",
+  "homepage": "https://github.com/YusufSizmaz/social-agent-ai#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YusufSizmaz/social-agent-ai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YusufSizmaz/social-agent-ai/issues"
+  },
   "license": "MIT",
+  "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
-    "@types/multer": "^2.0.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.0",
     "edge-tts-universal": "^1.4.0",
@@ -45,10 +67,12 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/multer": "^2.0.0",
     "@types/node": "^22.10.0",
     "@types/node-cron": "^3.0.11",
     "drizzle-kit": "^0.30.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.7"
   }
 }

@@ -1,249 +1,236 @@
 import { Router } from 'express';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
 import { db, schema } from '../../db/index.js';
+import { syncAccountCrons } from '../../core/account-scheduler.js';
+import { PUBLIC_DIR, ensureDir, publicUrlToPath } from '../../core/media.js';
+import { asyncHandler, parseBody, requireUuidParam } from '../middleware.js';
+import { createProjectSchema, updateProjectSchema } from '../schemas.js';
 
-const LOGOS_DIR = path.resolve('public/logos');
-if (!fs.existsSync(LOGOS_DIR)) fs.mkdirSync(LOGOS_DIR, { recursive: true });
+const LOGOS_DIR = path.join(PUBLIC_DIR, 'logos');
+const LOGO_EXTENSIONS: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+};
 
 const logoUpload = multer({
   storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, LOGOS_DIR),
-    filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname) || '.png';
-      cb(null, `logo_${req.params['id']}_${Date.now()}${ext}`);
+    destination: (_req, _file, cb) => {
+      ensureDir(LOGOS_DIR);
+      cb(null, LOGOS_DIR);
     },
+    // Never trust the client's filename or extension
+    filename: (_req, file, cb) => cb(null, `logo_${randomUUID()}${LOGO_EXTENSIONS[file.mimetype] ?? '.png'}`),
   }),
-  limits: { fileSize: 2 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    const allowed = ['image/png', 'image/jpeg', 'image/webp'];
-    cb(null, allowed.includes(file.mimetype));
-  },
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => cb(null, file.mimetype in LOGO_EXTENSIONS),
 });
+
+function removePublicFile(url: unknown): void {
+  if (typeof url !== 'string') return;
+  const filePath = publicUrlToPath(url);
+  if (filePath && fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+}
 
 export const projectsRouter = Router();
 
-projectsRouter.get('/', async (_req, res) => {
-  try {
-    const projects = await db.execute<{
-      id: string;
-      name: string;
-      description: string | null;
-      active: boolean;
-      config: Record<string, unknown>;
-      created_at: string;
-      updated_at: string;
-      account_count: number;
-      post_count: number;
-    }>(sql`
-      SELECT
-        p.*,
-        COALESCE(a.cnt, 0)::int AS account_count,
-        COALESCE(po.cnt, 0)::int AS post_count
-      FROM projects p
-      LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM accounts GROUP BY project_id) a ON a.project_id = p.id
-      LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM posts GROUP BY project_id) po ON po.project_id = p.id
-      ORDER BY p.created_at DESC
-    `);
+projectsRouter.param('id', (req, res, next) => requireUuidParam(req, res, next));
 
-    const result = projects.map(p => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      active: p.active,
-      config: p.config,
-      createdAt: p.created_at,
-      updatedAt: p.updated_at,
-      accountCount: p.account_count,
-      postCount: p.post_count,
-    }));
+projectsRouter.get('/', asyncHandler(async (_req, res) => {
+  const projects = await db.execute<{
+    id: string;
+    name: string;
+    description: string | null;
+    active: boolean;
+    config: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+    account_count: number;
+    post_count: number;
+  }>(sql`
+    SELECT
+      p.*,
+      COALESCE(a.cnt, 0)::int AS account_count,
+      COALESCE(po.cnt, 0)::int AS post_count
+    FROM projects p
+    LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM accounts GROUP BY project_id) a ON a.project_id = p.id
+    LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM posts GROUP BY project_id) po ON po.project_id = p.id
+    ORDER BY p.created_at DESC
+  `);
 
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+  res.json(projects.map(p => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    active: p.active,
+    config: p.config,
+    createdAt: p.created_at,
+    updatedAt: p.updated_at,
+    accountCount: p.account_count,
+    postCount: p.post_count,
+  })));
+}));
+
+projectsRouter.post('/', asyncHandler(async (req, res) => {
+  const body = parseBody(createProjectSchema, req, res);
+  if (!body) return;
+
+  const [existing] = await db
+    .select({ id: schema.projects.id })
+    .from(schema.projects)
+    .where(eq(schema.projects.name, body.name))
+    .limit(1);
+
+  if (existing) {
+    res.status(409).json({ error: `A project named "${body.name}" already exists` });
+    return;
   }
-});
 
-projectsRouter.post('/', async (req, res) => {
-  try {
-    const { name, description, config } = req.body as {
-      name: string;
-      description?: string;
-      config?: Record<string, unknown>;
-    };
+  const [project] = await db
+    .insert(schema.projects)
+    .values({ name: body.name, description: body.description, active: body.active ?? true, config: body.config ?? {} })
+    .returning();
 
-    const [project] = await db
-      .insert(schema.projects)
-      .values({ name, description, config: config ?? {} })
-      .returning();
+  res.status(201).json(project);
+}));
 
-    res.status(201).json(project);
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+projectsRouter.get('/:id', asyncHandler(async (req, res) => {
+  const [project] = await db
+    .select()
+    .from(schema.projects)
+    .where(eq(schema.projects.id, req.params['id'] as string))
+    .limit(1);
+
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
   }
-});
 
-projectsRouter.get('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const [project] = await db
-      .select()
-      .from(schema.projects)
-      .where(eq(schema.projects.id, id!))
-      .limit(1);
+  res.json(project);
+}));
 
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+projectsRouter.patch('/:id', asyncHandler(async (req, res) => {
+  const id = req.params['id'] as string;
+  const body = parseBody(updateProjectSchema, req, res);
+  if (!body) return;
 
-    res.json(project);
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+  const [existing] = await db
+    .select({ config: schema.projects.config })
+    .from(schema.projects)
+    .where(eq(schema.projects.id, id))
+    .limit(1);
+
+  if (!existing) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
   }
-});
 
-projectsRouter.patch('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, description, active, config } = req.body as {
-      name?: string;
-      description?: string;
-      active?: boolean;
-      config?: Record<string, unknown>;
-    };
+  // Merge config so fields managed elsewhere (e.g. logoUrl from the upload endpoint) are preserved
+  const mergedConfig = body.config !== undefined
+    ? { ...(existing.config ?? {}), ...body.config }
+    : undefined;
 
-    // Merge config: preserve logoUrl if not explicitly provided
-    let mergedConfig = config;
-    if (config !== undefined) {
-      const [existing] = await db
-        .select({ config: schema.projects.config })
-        .from(schema.projects)
-        .where(eq(schema.projects.id, id!))
-        .limit(1);
-      const oldCfg = (existing?.config ?? {}) as Record<string, unknown>;
-      mergedConfig = { ...oldCfg, ...config };
-      // Keep logoUrl from DB unless explicitly set in new config
-      if (!('logoUrl' in config) && oldCfg.logoUrl) {
-        mergedConfig.logoUrl = oldCfg.logoUrl;
-      }
-    }
-
-    const [updated] = await db
-      .update(schema.projects)
-      .set({
-        ...(name !== undefined ? { name } : {}),
-        ...(description !== undefined ? { description } : {}),
-        ...(active !== undefined ? { active } : {}),
-        ...(mergedConfig !== undefined ? { config: mergedConfig } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.projects.id, id!))
-      .returning();
-
-    if (!updated) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-
-    res.json(updated);
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+  if (body.config && 'logoUrl' in body.config && !body.config['logoUrl'] && existing.config?.['logoUrl']) {
+    removePublicFile(existing.config['logoUrl']);
   }
-});
 
-projectsRouter.post('/:id/logo', logoUpload.single('logo'), async (req, res) => {
-  try {
-    const id = req.params['id'] as string;
-    if (!req.file) {
-      res.status(400).json({ error: 'No valid image file (png/jpeg/webp, max 2MB)' });
-      return;
-    }
+  const [updated] = await db
+    .update(schema.projects)
+    .set({
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.description !== undefined ? { description: body.description } : {}),
+      ...(body.active !== undefined ? { active: body.active } : {}),
+      ...(mergedConfig !== undefined ? { config: mergedConfig } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.projects.id, id))
+    .returning();
 
-    // Get existing project to delete old logo
-    const [project] = await db
-      .select()
-      .from(schema.projects)
-      .where(eq(schema.projects.id, id))
-      .limit(1);
+  res.json(updated);
+}));
 
-    if (!project) {
-      fs.unlinkSync(req.file.path);
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-
-    // Delete old logo file if exists
-    const oldConfig = (project.config ?? {}) as Record<string, unknown>;
-    if (oldConfig.logoUrl && typeof oldConfig.logoUrl === 'string') {
-      const oldPath = path.resolve('public', oldConfig.logoUrl.replace(/^\/public\//, ''));
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-    }
-
-    const logoUrl = `/public/logos/${req.file.filename}`;
-    const newConfig = { ...oldConfig, logoUrl };
-
-    const [updated] = await db
-      .update(schema.projects)
-      .set({ config: newConfig, updatedAt: new Date() })
-      .where(eq(schema.projects.id, id))
-      .returning();
-
-    res.json({ logoUrl, project: updated });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+projectsRouter.post('/:id/logo', logoUpload.single('logo'), asyncHandler(async (req, res) => {
+  const id = req.params['id'] as string;
+  if (!req.file) {
+    res.status(400).json({ error: 'No valid image file (png/jpeg/webp, max 2MB)' });
+    return;
   }
-});
 
-projectsRouter.delete('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { force } = req.query as { force?: string };
+  const [project] = await db
+    .select()
+    .from(schema.projects)
+    .where(eq(schema.projects.id, id))
+    .limit(1);
 
-    const [accountCount] = await db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(schema.accounts)
-      .where(eq(schema.accounts.projectId, id!));
-
-    const [postCount] = await db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(schema.posts)
-      .where(eq(schema.posts.projectId, id!));
-
-    const totalAccounts = accountCount?.count ?? 0;
-    const totalPosts = postCount?.count ?? 0;
-
-    if ((totalAccounts > 0 || totalPosts > 0) && force !== 'true') {
-      res.status(409).json({
-        error: `Bu projeye bagli ${totalAccounts} hesap ve ${totalPosts} post var. Yine de silmek icin onaylayin.`,
-        accountCount: totalAccounts,
-        postCount: totalPosts,
-      });
-      return;
-    }
-
-    // Cascade: once bagli postlari, sonra hesaplari sil
-    if (totalPosts > 0) {
-      await db.delete(schema.posts).where(eq(schema.posts.projectId, id!));
-    }
-    if (totalAccounts > 0) {
-      await db.delete(schema.accounts).where(eq(schema.accounts.projectId, id!));
-    }
-
-    const [deleted] = await db
-      .delete(schema.projects)
-      .where(eq(schema.projects.id, id!))
-      .returning({ id: schema.projects.id });
-
-    if (!deleted) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+  if (!project) {
+    fs.unlinkSync(req.file.path);
+    res.status(404).json({ error: 'Project not found' });
+    return;
   }
-});
+
+  const oldConfig = (project.config ?? {}) as Record<string, unknown>;
+  removePublicFile(oldConfig['logoUrl']);
+
+  const logoUrl = `/public/logos/${req.file.filename}`;
+
+  const [updated] = await db
+    .update(schema.projects)
+    .set({ config: { ...oldConfig, logoUrl }, updatedAt: new Date() })
+    .where(eq(schema.projects.id, id))
+    .returning();
+
+  res.json({ logoUrl, project: updated });
+}));
+
+projectsRouter.delete('/:id', asyncHandler(async (req, res) => {
+  const id = req.params['id'] as string;
+  const force = req.query['force'] === 'true';
+
+  const [project] = await db
+    .select({ id: schema.projects.id, config: schema.projects.config })
+    .from(schema.projects)
+    .where(eq(schema.projects.id, id))
+    .limit(1);
+
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  const [counts] = await db.execute<{ accounts: number; posts: number }>(sql`
+    SELECT
+      (SELECT COUNT(*)::int FROM accounts WHERE project_id = ${id}) AS accounts,
+      (SELECT COUNT(*)::int FROM posts WHERE project_id = ${id}) AS posts
+  `);
+
+  const accountCount = counts?.accounts ?? 0;
+  const postCount = counts?.posts ?? 0;
+
+  if ((accountCount > 0 || postCount > 0) && !force) {
+    res.status(409).json({
+      error: `This project has ${accountCount} account(s) and ${postCount} post(s). Delete with ?force=true to remove them as well.`,
+      accountCount,
+      postCount,
+    });
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    const postIds = tx.select({ id: schema.posts.id }).from(schema.posts).where(eq(schema.posts.projectId, id));
+    await tx.delete(schema.postAnalytics).where(inArray(schema.postAnalytics.postId, postIds));
+    await tx.delete(schema.posts).where(eq(schema.posts.projectId, id));
+    await tx.delete(schema.accounts).where(eq(schema.accounts.projectId, id));
+    await tx.delete(schema.projects).where(eq(schema.projects.id, id));
+  });
+
+  removePublicFile(project.config?.['logoUrl']);
+  await syncAccountCrons();
+
+  res.json({ success: true });
+}));

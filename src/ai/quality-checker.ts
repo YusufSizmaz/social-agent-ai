@@ -14,27 +14,35 @@ export interface QualityResult {
 export async function checkQuality(text: string, platform: Platform): Promise<QualityResult> {
   return withRetry(async () => {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `Sen bir Turkce sosyal medya icerik kalite degerlendirmecisisin.
-Asagidaki ${platform} icin yazilmis icerigi degerlendir.
+      model: env.GEMINI_MODEL,
+      contents: `You are a social media content quality reviewer.
+Evaluate the following post written for ${platform}. The post may be in any language — judge it in its own language.
 
-Icerik:
+Post:
 """
 ${text}
 """
 
-Puanlama kriterleri:
-- Dil bilgisi ve yazim (0-25)
-- Ilgi cekicilik ve etkilesim potansiyeli (0-25)
-- Platforma uygunluk (0-25)
-- Mesaj netligi ve tutarliligi (0-25)
+Scoring criteria:
+- Grammar and spelling (0-25)
+- Engagement potential (0-25)
+- Platform fit (0-25)
+- Clarity and consistency of the message (0-25)
 
-Toplam puani (0-100) ve kisa bir geri bildirim ver.
-SADECE JSON formatinda cevap ver, baska hicbir sey yazma: {"score": <sayi>, "feedback": "<metin>"}`,
+Give the total score (0-100) and short feedback in the same language as the post.`,
       config: {
         temperature: 0.3,
         maxOutputTokens: 512,
         thinkingConfig: { thinkingBudget: 0 },
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: 'object' as const,
+          properties: {
+            score: { type: 'integer' as const },
+            feedback: { type: 'string' as const },
+          },
+          required: ['score', 'feedback'],
+        },
       },
     });
 
@@ -43,13 +51,16 @@ SADECE JSON formatinda cevap ver, baska hicbir sey yazma: {"score": <sayi>, "fee
       throw new Error('Empty response from Gemini quality check');
     }
 
-    // Extract JSON from response (handle markdown code blocks)
-    const jsonMatch = raw.match(/\{[\s\S]*"score"[\s\S]*"feedback"[\s\S]*\}/);
-    if (!jsonMatch) {
+    const parsed = JSON.parse(raw) as { score?: unknown; feedback?: unknown };
+    const score = Number(parsed.score);
+    if (!Number.isFinite(score)) {
       throw new Error(`Could not parse quality check response: ${raw.slice(0, 200)}`);
     }
 
-    const result = JSON.parse(jsonMatch[0]) as QualityResult;
+    const result: QualityResult = {
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
+    };
 
     logger.debug('Quality check completed', { platform, score: result.score });
 

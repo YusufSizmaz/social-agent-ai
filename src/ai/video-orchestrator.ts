@@ -1,6 +1,6 @@
 import { generateText } from './text-generator.js';
 import { generateImage, searchPexelsImage } from './image-generator.js';
-import { textToSpeech } from './tts.js';
+import { textToSpeech, voiceForLanguage } from './tts.js';
 import { generateVideo } from './video-generator.js';
 import { logger } from '../config/logger.js';
 import { ContentType } from '../config/constants.js';
@@ -29,8 +29,13 @@ export async function createVideoContent(request: ContentRequest): Promise<Video
   const textContent = await generateText(request);
   logger.info('Video pipeline — text generated', { length: textContent.text.length });
 
-  // Step 2: TTS — convert text to audio
-  const audioPath = await textToSpeech(textContent.text, 'tr-TR-EmelNeural', '+0%');
+  // Step 2: TTS — convert text to audio (voice from project config, else picked by language)
+  const context = request.context as Record<string, unknown> | undefined;
+  const configuredVoice = (context?.['projectConfig'] as Record<string, unknown> | undefined)?.['ttsVoice'];
+  const voice = typeof configuredVoice === 'string' && configuredVoice
+    ? configuredVoice
+    : voiceForLanguage(context?.['language'] as string | undefined);
+  const audioPath = await textToSpeech(textContent.text, voice, '+0%');
   logger.info('Video pipeline — TTS completed', { audioPath });
 
   // Step 3: Background image

@@ -4,23 +4,45 @@ import { eq } from 'drizzle-orm';
 import { env } from '../../config/env.js';
 import { db, schema } from '../../db/index.js';
 import { logger } from '../../config/logger.js';
+import { engine } from '../../core/engine.js';
+import { isUuid } from '../middleware.js';
 
 export const twitterAuthRouter = Router();
 
-// Temporary store for OAuth tokens (request token → { secret, accountId })
-const pendingTokens = new Map<string, { secret: string; accountId: string }>();
+const PENDING_TTL_MS = 10 * 60 * 1000;
+
+// Temporary store for OAuth request tokens (request token → { secret, accountId, expiresAt })
+const pendingTokens = new Map<string, { secret: string; accountId: string; expiresAt: number }>();
+
+function prunePending(): void {
+  const now = Date.now();
+  for (const [token, entry] of pendingTokens) {
+    if (entry.expiresAt < now) pendingTokens.delete(token);
+  }
+}
 
 twitterAuthRouter.get('/auth', async (req, res) => {
   try {
     const { accountId } = req.query as { accountId?: string };
 
-    if (!accountId) {
-      res.status(400).json({ error: 'accountId is required' });
+    if (!isUuid(accountId)) {
+      res.status(400).json({ error: 'A valid accountId is required' });
       return;
     }
 
     if (!env.TWITTER_API_KEY || !env.TWITTER_API_SECRET) {
       res.status(500).json({ error: 'Twitter API key/secret not configured in environment' });
+      return;
+    }
+
+    const [account] = await db
+      .select({ id: schema.accounts.id })
+      .from(schema.accounts)
+      .where(eq(schema.accounts.id, accountId))
+      .limit(1);
+
+    if (!account) {
+      res.status(404).json({ error: 'Account not found' });
       return;
     }
 
@@ -34,10 +56,8 @@ twitterAuthRouter.get('/auth', async (req, res) => {
       { linkMode: 'authorize' },
     );
 
-    pendingTokens.set(oauth_token, { secret: oauth_token_secret, accountId });
-
-    // Clean up stale tokens after 10 minutes
-    setTimeout(() => pendingTokens.delete(oauth_token), 10 * 60 * 1000);
+    prunePending();
+    pendingTokens.set(oauth_token, { secret: oauth_token_secret, accountId, expiresAt: Date.now() + PENDING_TTL_MS });
 
     res.redirect(url);
   } catch (err) {
@@ -55,20 +75,19 @@ twitterAuthRouter.get('/callback', async (req, res) => {
     };
 
     if (!oauth_token || !oauth_verifier) {
-      res.status(400).send(closePopupHtml(false, 'OAuth dogrulama basarisiz: eksik parametreler'));
+      res.status(400).send(closePopupHtml(false, 'OAuth verification failed: missing parameters'));
       return;
     }
 
     const pending = pendingTokens.get(oauth_token);
-    if (!pending) {
-      res.status(400).send(closePopupHtml(false, 'OAuth token suresi doldu, tekrar deneyin'));
+    pendingTokens.delete(oauth_token);
+    if (!pending || pending.expiresAt < Date.now()) {
+      res.status(400).send(closePopupHtml(false, 'OAuth session expired, please try again'));
       return;
     }
 
-    pendingTokens.delete(oauth_token);
-
     if (!env.TWITTER_API_KEY || !env.TWITTER_API_SECRET) {
-      res.status(500).send(closePopupHtml(false, 'Twitter API key/secret yapilandirilmamis'));
+      res.status(500).send(closePopupHtml(false, 'Twitter API key/secret not configured'));
       return;
     }
 
@@ -81,7 +100,6 @@ twitterAuthRouter.get('/callback', async (req, res) => {
 
     const { accessToken, accessSecret, screenName } = await client.login(oauth_verifier);
 
-    // Save credentials to account
     await db
       .update(schema.accounts)
       .set({
@@ -95,34 +113,41 @@ twitterAuthRouter.get('/callback', async (req, res) => {
       })
       .where(eq(schema.accounts.id, pending.accountId));
 
+    engine.invalidateAccount(pending.accountId);
     logger.info('Twitter OAuth completed', { accountId: pending.accountId, screenName });
 
     res.send(closePopupHtml(true, '', screenName));
   } catch (err) {
     logger.error('Twitter OAuth callback error', { error: err instanceof Error ? err.message : String(err) });
-    res.status(500).send(closePopupHtml(false, 'OAuth baglanma hatasi: ' + (err instanceof Error ? err.message : String(err))));
+    res.status(500).send(closePopupHtml(false, 'OAuth connection failed'));
   }
 });
 
+/** JSON that is safe to embed inside a <script> tag */
+function scriptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+}
+
 function closePopupHtml(success: boolean, error?: string, screenName?: string): string {
-  const message = JSON.stringify({
+  const message = scriptJson({
     type: 'twitter-oauth',
     success,
     screenName: screenName ?? '',
     error: error ?? '',
   });
 
-  const fallbackText = success
-    ? 'Basarili! Bu pencereyi kapatabilirsiniz.'
-    : (error || 'Bir hata olustu');
+  const fallbackText = scriptJson(success ? 'Success! You can close this window.' : (error || 'Something went wrong'));
 
   return `<!DOCTYPE html><html><head><title>Twitter OAuth</title></head><body>
 <script>
   if (window.opener) {
-    window.opener.postMessage(${message}, '*');
+    window.opener.postMessage(${message}, window.location.origin);
     window.close();
   } else {
-    document.body.innerHTML = ${JSON.stringify(fallbackText)};
+    document.body.textContent = ${fallbackText};
   }
 </script>
 </body></html>`;

@@ -3,15 +3,16 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: bot
-      POSTGRES_PASSWORD: bot
+      POSTGRES_USER: ${POSTGRES_USER:-bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bot}
       POSTGRES_DB: social_media_bot
+    # Only reachable from this machine — remove the binding entirely if you don't need host access
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bot -d social_media_bot"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot} -d social_media_bot"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -24,29 +25,20 @@ services:
         condition: service_healthy
     ports:
       - "${PORT:-3000}:3000"
+    # All settings come from .env; the values below override it for the container network
+    env_file: .env
     environment:
-      DATABASE_URL: postgresql://bot:bot@db:5432/social_media_bot
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      TWITTER_API_KEY: ${TWITTER_API_KEY:-}
-      TWITTER_API_SECRET: ${TWITTER_API_SECRET:-}
-      TWITTER_ACCESS_TOKEN: ${TWITTER_ACCESS_TOKEN:-}
-      TWITTER_ACCESS_SECRET: ${TWITTER_ACCESS_SECRET:-}
-      INSTAGRAM_ACCESS_TOKEN: ${INSTAGRAM_ACCESS_TOKEN:-}
-      INSTAGRAM_BUSINESS_ACCOUNT_ID: ${INSTAGRAM_BUSINESS_ACCOUNT_ID:-}
-      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
-      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
-      YOUTUBE_REFRESH_TOKEN: ${YOUTUBE_REFRESH_TOKEN:-}
-      TIKTOK_ACCESS_TOKEN: ${TIKTOK_ACCESS_TOKEN:-}
-      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
-      WHATSAPP_ADMIN_NUMBER: ${WHATSAPP_ADMIN_NUMBER:-}
-      CATPET_DATABASE_URL: ${CATPET_DATABASE_URL:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bot}:${POSTGRES_PASSWORD:-bot}@db:5432/social_media_bot
+      PORT: 3000
       NODE_ENV: production
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
     volumes:
       - whatsapp_session:/app/.wwebjs_auth
       - temp_data:/app/temp
+      - public_data:/app/public
 
 volumes:
   pgdata:
   whatsapp_session:
   temp_data:
+  public_data:

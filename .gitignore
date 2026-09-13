@@ -3,13 +3,14 @@ node_modules/
 
 # Build output
 dist/
+coverage/
 
 # Environment
 .env
 .env.local
 .env.*.local
 
-# Public
+# Uploaded logos and generated media
 public/
 
 # Logs
@@ -33,9 +34,9 @@ temp/
 *.swp
 *.swo
 
-# Drizzle Studio
-drizzle/meta/_journal.json
+# Claude Code local settings
+.claude/settings.local.json
 
-# Test / dev only files
+# Personal / local-only scripts
 src/db/seed.ts
 src/test-run.ts

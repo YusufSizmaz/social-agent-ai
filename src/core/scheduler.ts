@@ -8,11 +8,25 @@ interface ScheduledJob {
 }
 
 const jobs = new Map<string, ScheduledJob>();
+let started = false;
 
-export function registerCron(name: string, expression: string, fn: () => void | Promise<void>): void {
+export function isValidCron(expression: string): boolean {
+  return cron.validate(expression);
+}
+
+/**
+ * Registers a cron job. Returns false if the name is taken or the expression is invalid.
+ * Jobs registered after startAllCrons() start immediately.
+ */
+export function registerCron(name: string, expression: string, fn: () => void | Promise<void>): boolean {
   if (jobs.has(name)) {
     logger.warn(`Cron job "${name}" already registered, skipping`);
-    return;
+    return false;
+  }
+
+  if (!isValidCron(expression)) {
+    logger.error(`Invalid cron expression for "${name}": "${expression}"`);
+    return false;
   }
 
   const task = cron.schedule(expression, async () => {
@@ -21,10 +35,11 @@ export function registerCron(name: string, expression: string, fn: () => void | 
     } catch (err) {
       logger.error(`Cron job "${name}" failed`, { error: err instanceof Error ? err.message : String(err) });
     }
-  }, { scheduled: false });
+  }, { scheduled: started });
 
   jobs.set(name, { name, expression, task });
   logger.info(`Cron job registered: "${name}" (${expression})`);
+  return true;
 }
 
 export function unregisterCron(name: string): void {
@@ -32,14 +47,19 @@ export function unregisterCron(name: string): void {
   if (job) {
     job.task.stop();
     jobs.delete(name);
-    logger.info(`Cron job unregistered: "${name}"`);
+    logger.debug(`Cron job unregistered: "${name}"`);
   }
+}
+
+export function listCronNames(): string[] {
+  return [...jobs.keys()];
 }
 
 export function startAllCrons(): void {
   for (const job of jobs.values()) {
     job.task.start();
   }
+  started = true;
   logger.info(`Started ${jobs.size} cron jobs`);
 }
 
@@ -47,5 +67,6 @@ export function stopAllCrons(): void {
   for (const job of jobs.values()) {
     job.task.stop();
   }
+  started = false;
   logger.info(`Stopped ${jobs.size} cron jobs`);
 }

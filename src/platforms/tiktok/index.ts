@@ -4,6 +4,8 @@ import { env } from '../../config/env.js';
 import type { GeneratedContent, PlatformPostResult, PostAnalyticsData } from '../../types/index.js';
 import { BasePlatformAdapter } from '../base.js';
 import { logger } from '../../config/logger.js';
+import { composePostText } from '../../core/safety-guard.js';
+import { resolveMediaFile } from '../../core/media.js';
 
 export class TikTokAdapter extends BasePlatformAdapter {
   platform = Platform.TIKTOK as const;
@@ -32,15 +34,30 @@ export class TikTokAdapter extends BasePlatformAdapter {
 
   protected async doPost(content: GeneratedContent, _accountId: string): Promise<PlatformPostResult> {
     const token = this.getToken();
-    const videoPath = content.mediaUrls?.[0];
+    const mediaUrl = content.mediaUrls?.[0];
 
-    if (!videoPath) {
+    if (!mediaUrl) {
       return { success: false, error: 'TikTok requires a video file' };
     }
 
-    const caption = [content.text, ...content.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`))].join(' ');
+    let media: Awaited<ReturnType<typeof resolveMediaFile>>;
+    try {
+      media = await resolveMediaFile(mediaUrl);
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
 
-    // Step 1: Initialize upload
+    try {
+      return await this.uploadVideo(token, media.filePath, composePostText(content));
+    } finally {
+      media.cleanup();
+    }
+  }
+
+  private async uploadVideo(token: string, videoPath: string, caption: string): Promise<PlatformPostResult> {
+    const videoSize = fs.statSync(videoPath).size;
+
+    // Step 1: Initialize upload (single chunk — TikTok allows up to 64MB per chunk)
     const initRes = await fetch(`${this.baseUrl}/post/publish/video/init/`, {
       method: 'POST',
       headers: {
@@ -57,7 +74,9 @@ export class TikTokAdapter extends BasePlatformAdapter {
         },
         source_info: {
           source: 'FILE_UPLOAD',
-          video_size: fs.statSync(videoPath).size,
+          video_size: videoSize,
+          chunk_size: videoSize,
+          total_chunk_count: 1,
         },
       }),
     });

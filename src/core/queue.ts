@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { JobStatus, type JobType } from '../config/constants.js';
+import { JobStatus, RETRY_CONFIG, type JobType } from '../config/constants.js';
 import { logger } from '../config/logger.js';
 
 export interface Job {
@@ -10,6 +10,9 @@ export interface Job {
   attempts: number;
   maxAttempts: number;
 }
+
+/** A job stuck in "processing" longer than this is assumed to belong to a crashed worker */
+const STALE_JOB_MINUTES = 30;
 
 export async function enqueueJob(
   type: JobType,
@@ -75,13 +78,36 @@ export async function completeJob(jobId: string, result?: Record<string, unknown
     .where(eq(schema.jobQueue.id, jobId));
 }
 
-export async function failJob(jobId: string, error: string, canRetry: boolean): Promise<void> {
+/** Delay before the next attempt: exponential in the attempt number, capped at 30 minutes */
+export function retryDelayMs(attempt: number): number {
+  return Math.min(RETRY_CONFIG.baseDelayMs * 30 * Math.pow(2, Math.max(0, attempt - 1)), 30 * 60 * 1000);
+}
+
+export async function failJob(jobId: string, error: string, canRetry: boolean, attempt = 1): Promise<void> {
   await db
     .update(schema.jobQueue)
     .set({
       status: canRetry ? JobStatus.RETRYING : JobStatus.FAILED,
       errorMessage: error,
+      scheduledAt: canRetry ? new Date(Date.now() + retryDelayMs(attempt)) : undefined,
       completedAt: canRetry ? undefined : new Date(),
     })
     .where(eq(schema.jobQueue.id, jobId));
+}
+
+/** Re-queues jobs left in "processing" by a process that crashed or was killed */
+export async function recoverStaleJobs(): Promise<number> {
+  const rows = await db.execute<{ id: string }>(sql`
+    UPDATE job_queue
+    SET status = CASE WHEN attempts < max_attempts THEN 'retrying'::job_status ELSE 'failed'::job_status END,
+        error_message = COALESCE(error_message, 'Recovered after worker interruption')
+    WHERE status = 'processing'
+      AND started_at < NOW() - make_interval(mins => ${STALE_JOB_MINUTES})
+    RETURNING id
+  `);
+
+  if (rows.length > 0) {
+    logger.warn(`Recovered ${rows.length} stale job(s)`);
+  }
+  return rows.length;
 }
