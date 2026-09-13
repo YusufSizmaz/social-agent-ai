@@ -1,4 +1,4 @@
-FROM node:20-slim AS base
+FROM node:26-slim AS base
 
 # Chromium for whatsapp-web.js, FFmpeg for the video pipeline, fonts for subtitles
 RUN apt-get update && apt-get install -y --no-install-recommends \
