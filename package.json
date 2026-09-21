@@ -72,7 +72,7 @@
     "@types/node-cron": "^3.0.11",
     "drizzle-kit": "^0.30.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
+    "typescript": "^7.0.2",
     "vitest": "^3.2.7"
   }
 }
