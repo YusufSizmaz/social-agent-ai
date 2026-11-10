@@ -1,8 +1,9 @@
-import { timingSafeEqual } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
+import multer from 'multer';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { z, type ZodTypeAny } from 'zod';
 import { logger } from '../config/logger.js';
-import { errorMessage, isConnectionRefused } from '../core/errors.js';
+import { errorCode, errorMessage, errorStack, isConnectionRefused } from '../core/errors.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -10,10 +11,10 @@ export function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_RE.test(value);
 }
 
+/** Constant-time comparison that also hides the length of the expected value */
 function safeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
+  const digest = (s: string) => createHash('sha256').update(s).digest();
+  return timingSafeEqual(digest(a), digest(b));
 }
 
 /**
@@ -76,21 +77,37 @@ export function asyncHandler(
   };
 }
 
-export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
-  const status = (err as { status?: number; statusCode?: number })?.status
+function statusFor(err: unknown): number {
+  if (err instanceof multer.MulterError) {
+    return err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+  }
+  const pgCode = errorCode(err);
+  if (pgCode === '23505') return 409; // unique_violation
+  if (pgCode === '23503') return 409; // foreign_key_violation
+  return (err as { status?: number })?.status
     ?? (err as { statusCode?: number })?.statusCode
     ?? 500;
+}
+
+function clientMessage(err: unknown, status: number): string {
+  if (status >= 500) return 'Internal server error';
+  const pgCode = errorCode(err);
+  if (pgCode === '23505') return 'A record with the same unique value already exists';
+  if (pgCode === '23503') return 'The record is referenced by, or references, another record';
+  return err instanceof Error ? err.message : 'Bad request';
+}
+
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
+  const status = statusFor(err);
 
   if (status >= 500) {
     logger.error(`${req.method} ${req.path} failed`, {
       error: errorMessage(err),
-      ...(isConnectionRefused(err) ? {} : { stack: err instanceof Error ? err.stack : undefined }),
+      ...(isConnectionRefused(err) ? {} : { stack: errorStack(err) }),
     });
   }
 
   if (res.headersSent) return;
 
-  res.status(status).json({
-    error: status >= 500 ? 'Internal server error' : (err instanceof Error ? err.message : 'Bad request'),
-  });
+  res.status(status).json({ error: clientMessage(err, status) });
 }

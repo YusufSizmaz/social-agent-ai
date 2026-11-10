@@ -36,13 +36,19 @@ twitterAuthRouter.get('/auth', async (req, res) => {
     }
 
     const [account] = await db
-      .select({ id: schema.accounts.id })
+      .select({ id: schema.accounts.id, platform: schema.accounts.platform })
       .from(schema.accounts)
       .where(eq(schema.accounts.id, accountId))
       .limit(1);
 
     if (!account) {
       res.status(404).json({ error: 'Account not found' });
+      return;
+    }
+
+    // The callback overwrites the account's credentials, so never run it for another platform
+    if (account.platform !== 'twitter') {
+      res.status(400).json({ error: 'Twitter authorization is only available for Twitter accounts' });
       return;
     }
 

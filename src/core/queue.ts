@@ -14,12 +14,15 @@ export interface Job {
 /** A job stuck in "processing" longer than this is assumed to belong to a crashed worker */
 const STALE_JOB_MINUTES = 30;
 
+/** `db` or a transaction handle, so a job can be queued atomically with the row it refers to */
+type Executor = Pick<typeof db, 'insert'>;
+
 export async function enqueueJob(
   type: JobType,
   payload: Record<string, unknown>,
-  options?: { priority?: number; scheduledAt?: Date; maxAttempts?: number },
+  options?: { priority?: number; scheduledAt?: Date; maxAttempts?: number; tx?: Executor },
 ): Promise<string> {
-  const [job] = await db
+  const [job] = await (options?.tx ?? db)
     .insert(schema.jobQueue)
     .values({
       type,
@@ -83,27 +86,67 @@ export function retryDelayMs(attempt: number): number {
   return Math.min(RETRY_CONFIG.baseDelayMs * 30 * Math.pow(2, Math.max(0, attempt - 1)), 30 * 60 * 1000);
 }
 
-export async function failJob(jobId: string, error: string, canRetry: boolean, attempt = 1): Promise<void> {
+export async function failJob(
+  jobId: string,
+  error: string,
+  canRetry: boolean,
+  attempt = 1,
+  minDelayMs = 0,
+): Promise<void> {
   await db
     .update(schema.jobQueue)
     .set({
       status: canRetry ? JobStatus.RETRYING : JobStatus.FAILED,
       errorMessage: error,
-      scheduledAt: canRetry ? new Date(Date.now() + retryDelayMs(attempt)) : undefined,
+      scheduledAt: canRetry ? new Date(Date.now() + Math.max(retryDelayMs(attempt), minDelayMs)) : undefined,
       completedAt: canRetry ? undefined : new Date(),
     })
     .where(eq(schema.jobQueue.id, jobId));
 }
 
-/** Re-queues jobs left in "processing" by a process that crashed or was killed */
-export async function recoverStaleJobs(): Promise<number> {
+/**
+ * Puts a job back in the queue to run at `runAt` without spending one of its attempts
+ * (used when an account has hit its hourly/daily publishing limit).
+ */
+export async function deferJob(jobId: string, runAt: Date, reason: string): Promise<void> {
+  await db
+    .update(schema.jobQueue)
+    .set({
+      status: JobStatus.RETRYING,
+      attempts: sql`GREATEST(${schema.jobQueue.attempts} - 1, 0)`,
+      scheduledAt: runAt,
+      errorMessage: reason,
+    })
+    .where(eq(schema.jobQueue.id, jobId));
+}
+
+/**
+ * Re-queues jobs left in "processing" by a process that crashed or was killed.
+ * Publish jobs that are out of attempts also fail their post, so it can be retried from the dashboard
+ * instead of staying in "publishing" forever.
+ */
+export async function recoverStaleJobs(olderThanMinutes = STALE_JOB_MINUTES): Promise<number> {
   const rows = await db.execute<{ id: string }>(sql`
-    UPDATE job_queue
-    SET status = CASE WHEN attempts < max_attempts THEN 'retrying'::job_status ELSE 'failed'::job_status END,
-        error_message = COALESCE(error_message, 'Recovered after worker interruption')
-    WHERE status = 'processing'
-      AND started_at < NOW() - make_interval(mins => ${STALE_JOB_MINUTES})
-    RETURNING id
+    WITH recovered AS (
+      UPDATE job_queue
+      SET status = CASE WHEN attempts < max_attempts THEN 'retrying'::job_status ELSE 'failed'::job_status END,
+          completed_at = CASE WHEN attempts < max_attempts THEN NULL ELSE NOW() END,
+          error_message = COALESCE(error_message, 'Recovered after worker interruption')
+      WHERE status = 'processing'
+        AND started_at < NOW() - make_interval(mins => ${olderThanMinutes})
+      RETURNING id, type, status, payload
+    ), orphaned_posts AS (
+      UPDATE posts
+      SET status = 'failed',
+          error_message = 'Publishing was interrupted (the worker stopped). Retry from the dashboard.',
+          updated_at = NOW()
+      WHERE status = 'publishing'
+        AND id::text IN (
+          SELECT payload->>'postId' FROM recovered
+          WHERE type = 'publish_post' AND status = 'failed'
+        )
+    )
+    SELECT id FROM recovered
   `);
 
   if (rows.length > 0) {

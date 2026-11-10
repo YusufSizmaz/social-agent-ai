@@ -127,15 +127,13 @@ export async function optimizeStrategies(): Promise<void> {
     }
 
     if (hourEngagement.size >= 2) {
-      const sortedHours = [...hourEngagement.entries()]
+      const hoursByScore = [...hourEngagement.entries()]
         .map(([hour, data]) => ({ hour, avg: data.total / data.count }))
         .sort((a, b) => b.avg - a.avg)
-        .slice(0, 3)
-        .map((h) => h.hour)
-        .sort((a, b) => a - b);
+        .map((h) => h.hour);
 
-      const newCron = `0 ${sortedHours.join(',')} * * *`;
-      if (newCron !== strategy.cronExpression) {
+      const newCron = retimeCron(strategy.cronExpression, hoursByScore);
+      if (newCron && newCron !== strategy.cronExpression) {
         const oldCron = strategy.cronExpression;
         strategy.cronExpression = newCron;
         updates.push(`cron ${oldCron} -> ${newCron}`);
@@ -197,4 +195,25 @@ export async function optimizeStrategies(): Promise<void> {
   }
 
   logger.info('Strategy optimization completed', { changesCount: changes.length });
+}
+
+/**
+ * Moves a fixed-hours cron expression (e.g. `30 9,15 * * 1-5`) to the best-performing hours while
+ * keeping its minute, day and weekday fields and its number of posts per day.
+ * Returns null when the hour field isn't a plain list of hours (`*`, step values like every-4-hours, ranges): rewriting
+ * those would change how often the account posts.
+ */
+export function retimeCron(expression: string, hoursByScore: number[]): string | null {
+  const fields = expression.trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+
+  const [minute, hour, ...rest] = fields as [string, string, string, string, string];
+  if (!/^\d{1,2}(,\d{1,2})*$/.test(hour) || !/^\d{1,2}$/.test(minute)) return null;
+
+  const postsPerDay = new Set(hour.split(',')).size;
+  const best = [...new Set(hoursByScore)].filter((h) => Number.isInteger(h) && h >= 0 && h <= 23);
+  if (best.length < postsPerDay) return null;
+
+  const hours = best.slice(0, postsPerDay).sort((a, b) => a - b);
+  return [minute, hours.join(','), ...rest].join(' ');
 }

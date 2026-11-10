@@ -4,6 +4,7 @@ import { PostStatus, type Platform } from '../config/constants.js';
 import { logger } from '../config/logger.js';
 import { engine } from '../core/engine.js';
 import type { PostAnalyticsData } from '../types/index.js';
+import { errorMessage } from '../core/errors.js';
 
 export async function trackPostAnalytics(postId: string): Promise<PostAnalyticsData | null> {
   const [post] = await db
@@ -40,7 +41,7 @@ export async function trackPostAnalytics(postId: string): Promise<PostAnalyticsD
   } catch (err) {
     logger.error('Failed to track analytics', {
       postId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
     return null;
   }

@@ -526,8 +526,8 @@
         const [stats, posts, analyticsSummary, accountPerf] = await Promise.all([
           api(`/api/dashboard/stats${qs}`),
           api(`/api/dashboard/recent-posts${qs}`),
-          api('/api/dashboard/analytics-summary'),
-          api('/api/dashboard/account-performance'),
+          api(`/api/dashboard/analytics-summary${qs}`),
+          api(`/api/dashboard/account-performance${qs}`),
         ]);
 
         // Stats
@@ -685,7 +685,10 @@
       }).join('');
     }
 
+    let logoRemoved = false;
+
     function openProjectModal(id) {
+      logoRemoved = false;
       const p = id ? projects.find(x => x.id === id) : null;
       const cfg = p?.config || {};
       const body = `
@@ -784,6 +787,7 @@
           autoPublish: document.getElementById('pf-autoPublish').checked,
           language: document.getElementById('pf-language').value,
         };
+        if (logoRemoved) config.logoUrl = '';
         const payload = {
           name,
           description: document.getElementById('pf-desc').value,
@@ -816,12 +820,14 @@
       const file = input.files?.[0];
       const preview = document.getElementById('pf-logo-preview');
       if (file && preview) {
+        logoRemoved = false;
         preview.src = URL.createObjectURL(file);
         preview.style.display = '';
       }
     }
 
     function removeLogo() {
+      logoRemoved = true;
       const preview = document.getElementById('pf-logo-preview');
       if (preview) { preview.src = ''; preview.style.display = 'none'; }
       const input = document.getElementById('pf-logo');
@@ -897,7 +903,7 @@
       const body = `
         <div class="form-group">
           <label>Proje</label>
-          <select id="af-project">
+          <select id="af-project" ${id ? 'disabled title="Hesap baska bir projeye tasinamaz"' : ''}>
             ${projects.map(p => `<option value="${p.id}" ${a.projectId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
           </select>
         </div>
@@ -1060,9 +1066,9 @@
         promptTemplate: document.getElementById('af-strat-prompt')?.value || '',
         cronExpression: document.getElementById('af-strat-cron')?.value || '0 */4 * * *',
         contentMix: {
-          original: parseInt(document.getElementById('af-strat-original')?.value) || 70,
-          repost: parseInt(document.getElementById('af-strat-repost')?.value) || 20,
-          reply: parseInt(document.getElementById('af-strat-reply')?.value) || 10,
+          original: percentOr(document.getElementById('af-strat-original')?.value, 70),
+          repost: percentOr(document.getElementById('af-strat-repost')?.value, 20),
+          reply: percentOr(document.getElementById('af-strat-reply')?.value, 10),
         },
         hashtags,
         language: document.getElementById('af-strat-lang')?.value || 'tr',
@@ -1147,6 +1153,7 @@
               role: document.getElementById('af-role').value,
               credentials,
               strategy,
+              active: document.getElementById('af-active').checked,
             },
           });
           toast('Hesap olusturuldu');
@@ -1201,7 +1208,7 @@
             <td style="color:var(--text-muted)">${new Date(p.createdAt).toLocaleDateString('tr-TR')}</td>
             <td>
               ${p.status === 'review' ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();approvePost('${p.id}')">Onayla</button>` : ''}
-              ${['review','scheduled'].includes(p.status) ? `<button class="btn btn-primary btn-sm" style="background:#16a34a;border-color:#16a34a" onclick="event.stopPropagation();publishPost('${p.id}','${p.platform}')">Yayinla</button>` : ''}
+              ${['review','scheduled','failed'].includes(p.status) ? `<button class="btn btn-primary btn-sm" style="background:#16a34a;border-color:#16a34a" onclick="event.stopPropagation();publishPost('${p.id}','${p.platform}')">${p.status === 'failed' ? 'Tekrar dene' : 'Yayinla'}</button>` : ''}
               <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deletePost('${p.id}')">Sil</button>
             </td>
           </tr>`).join('');
@@ -1236,6 +1243,11 @@
             <label>Hashtagler</label>
             <input id="vp-hashtags" value="${esc(hashtags)}">
           </div>
+          ${EDITABLE_STATUSES.includes(post.status) ? `
+          <div class="form-group">
+            <label>Yayin zamani <span style="color:var(--text-muted);font-weight:normal">(bos = onaylaninca hemen)</span></label>
+            <input type="datetime-local" id="vp-scheduled" value="${toLocalInput(post.scheduledAt)}">
+          </div>` : ''}
           ${post.errorMessage ? `
           <div class="form-group">
             <label>Hata</label>
@@ -1256,10 +1268,12 @@
         if (post.status === 'review') {
           actions.push(`<button class="btn btn-primary" onclick="approvePost('${id}')">Onayla</button>`);
         }
-        if (['review','scheduled'].includes(post.status)) {
-          actions.push(`<button class="btn btn-primary" style="background:#16a34a;border-color:#16a34a" onclick="publishPost('${id}','${post.platform}')">Yayinla</button>`);
+        if (['review','scheduled','failed'].includes(post.status)) {
+          actions.push(`<button class="btn btn-primary" style="background:#16a34a;border-color:#16a34a" onclick="publishPost('${id}','${post.platform}')">${post.status === 'failed' ? 'Tekrar dene' : 'Simdi yayinla'}</button>`);
         }
-        actions.push(`<button class="btn btn-secondary" onclick="savePost('${id}')">Kaydet</button>`);
+        if (EDITABLE_STATUSES.includes(post.status)) {
+          actions.push(`<button class="btn btn-secondary" onclick="savePost('${id}')">Kaydet</button>`);
+        }
         actions.push(`<button class="btn btn-secondary" onclick="closeModal()">Kapat</button>`);
         openModal('Post Detay', body, actions.join(' '));
       } catch (err) { toast(err.message, 'error'); }
@@ -1270,7 +1284,7 @@
         const text = document.getElementById('vp-text').value;
         const hashtagStr = document.getElementById('vp-hashtags').value;
         const hashtags = hashtagStr.split(/\s+/).map(t => t.replace(/^#/, '')).filter(Boolean);
-        await api(`/api/posts/${id}`, { method: 'PATCH', body: { text, hashtags } });
+        await api(`/api/posts/${id}`, { method: 'PATCH', body: { text, hashtags, scheduledAt: scheduledFromForm() } });
         toast('Post guncellendi');
         closeModal();
         loadPosts();
@@ -1279,8 +1293,18 @@
 
     async function approvePost(id) {
       try {
-        await api(`/api/posts/${id}`, { method: 'PATCH', body: { status: 'scheduled' } });
-        toast('Post onaylandi ve zamanlanmaya alindi');
+        const scheduledAt = scheduledFromForm();
+        const body = { status: 'scheduled', scheduledAt };
+        // Keep edits made in the modal when approving from it
+        const textEl = document.getElementById('vp-text');
+        if (textEl) {
+          body.text = textEl.value;
+          body.hashtags = document.getElementById('vp-hashtags').value.split(/\s+/).map(t => t.replace(/^#/, '')).filter(Boolean);
+        }
+        await api(`/api/posts/${id}`, { method: 'PATCH', body });
+        toast(scheduledAt
+          ? `Post onaylandi — ${new Date(scheduledAt).toLocaleString('tr-TR')} tarihinde yayinlanacak`
+          : 'Post onaylandi — bir dakika icinde yayinlanacak');
         closeModal();
         loadPosts();
       } catch (err) { toast(err.message, 'error'); }
@@ -1438,9 +1462,33 @@
 
     // ── Helpers ──
     function esc(s) {
-      const d = document.createElement('div');
-      d.textContent = s || '';
-      return d.innerHTML;
+      return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    const EDITABLE_STATUSES = ['review', 'scheduled', 'failed'];
+
+    function percentOr(value, fallback) {
+      const n = parseInt(value, 10);
+      return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback;
+    }
+
+    /** ISO date → value for <input type="datetime-local"> in the browser's timezone */
+    function toLocalInput(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    /** Reads the publish-time input of the post modal; null when empty or not present */
+    function scheduledFromForm() {
+      const v = document.getElementById('vp-scheduled')?.value;
+      return v ? new Date(v).toISOString() : null;
     }
 
     // ── Init ──

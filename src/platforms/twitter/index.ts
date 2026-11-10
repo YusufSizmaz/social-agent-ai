@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { TwitterApi, type TweetV2PostTweetResult } from 'twitter-api-v2';
 import { eq } from 'drizzle-orm';
 import { Platform } from '../../config/constants.js';
@@ -9,6 +11,30 @@ import { db, schema } from '../../db/index.js';
 import { composePostText } from '../../core/safety-guard.js';
 import { resolveMediaFile } from '../../core/media.js';
 import { NonRetryableError } from '../../core/errors.js';
+
+const MIME_TYPES: Record<string, 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'video/mp4' | 'video/quicktime'> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+};
+
+/**
+ * Uploads a local file through the v2 media endpoint (the v1.1 `media/upload` endpoint is retired).
+ * The library chunks the upload and waits for video processing to finish.
+ */
+async function uploadMediaV2(client: TwitterApi, filePath: string): Promise<string> {
+  const mediaType = MIME_TYPES[path.extname(filePath).toLowerCase()];
+  if (!mediaType) {
+    throw new NonRetryableError(`Unsupported media type for Twitter: ${path.basename(filePath)}`);
+  }
+  const category = mediaType === 'image/gif' ? 'tweet_gif' : mediaType.startsWith('video/') ? 'tweet_video' : 'tweet_image';
+  const buffer = await fs.promises.readFile(filePath);
+  return client.v2.uploadMedia(buffer, { media_type: mediaType, media_category: category });
+}
 
 export class TwitterAdapter extends BasePlatformAdapter {
   platform = Platform.TWITTER as const;
@@ -82,7 +108,7 @@ export class TwitterAdapter extends BasePlatformAdapter {
       for (const url of content.mediaUrls.slice(0, 4)) {
         const { filePath, cleanup } = await resolveMediaFile(url);
         try {
-          ids.push(await client.v1.uploadMedia(filePath));
+          ids.push(await uploadMediaV2(client, filePath));
         } finally {
           cleanup();
         }
@@ -164,8 +190,7 @@ export class TwitterAdapter extends BasePlatformAdapter {
 
   async uploadMedia(filePath: string, accountId: string): Promise<string> {
     const client = await this.getClientForAccount(accountId);
-    const mediaId = await client.v1.uploadMedia(filePath);
-    return mediaId;
+    return uploadMediaV2(client, filePath);
   }
 
   /** Drops the cached client so updated credentials are picked up on the next call */

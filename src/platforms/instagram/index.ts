@@ -5,8 +5,9 @@ import { BasePlatformAdapter } from '../base.js';
 import { logger } from '../../config/logger.js';
 import { composePostText } from '../../core/safety-guard.js';
 import { toAbsoluteUrl } from '../../core/media.js';
+import { httpError } from '../http-error.js';
 
-const GRAPH_URL = 'https://graph.facebook.com/v21.0';
+const GRAPH_URL = 'https://graph.facebook.com/v23.0';
 const CONTAINER_POLL_INTERVAL_MS = 5000;
 const CONTAINER_MAX_WAIT_MS = 5 * 60 * 1000;
 
@@ -89,12 +90,11 @@ export class InstagramAdapter extends BasePlatformAdapter {
 
     const { id: containerId } = (await createRes.json()) as IGIdResponse;
 
-    // Videos are processed asynchronously — wait until the container is ready
-    if (isVideo) {
-      const ready = await this.waitForContainer(containerId, token);
-      if (!ready.ok) {
-        return { success: false, error: `Instagram video processing failed: ${ready.reason}` };
-      }
+    // Containers (images too) are processed asynchronously — publishing before they are ready
+    // fails with "Media ID is not available"
+    const ready = await this.waitForContainer(containerId, token);
+    if (!ready.ok) {
+      return { success: false, error: `Instagram media processing failed: ${ready.reason}` };
     }
 
     // Step 2: Publish
@@ -132,6 +132,9 @@ export class InstagramAdapter extends BasePlatformAdapter {
         if (data.status_code === 'ERROR' || data.status_code === 'EXPIRED') {
           return { ok: false, reason: data.status ?? data.status_code };
         }
+      } else if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        // Expired token, missing permission, unknown container — polling won't fix it
+        return { ok: false, reason: `status check failed (${res.status}): ${(await res.text()).slice(0, 300)}` };
       }
       await new Promise((resolve) => setTimeout(resolve, CONTAINER_POLL_INTERVAL_MS));
     }
@@ -163,12 +166,15 @@ export class InstagramAdapter extends BasePlatformAdapter {
   protected async doGetAnalytics(platformPostId: string, _accountId: string): Promise<PostAnalyticsData> {
     const { token } = this.getCredentials();
 
+    // `impressions` is deprecated for media (and never existed for Reels) — `views` replaces it.
+    // One invalid metric fails the whole request, so only request ones valid for feed posts and Reels.
     const res = await fetch(
-      `${GRAPH_URL}/${platformPostId}/insights?metric=impressions,reach,likes,comments,shares&access_token=${encodeURIComponent(token)}`,
+      `${GRAPH_URL}/${platformPostId}/insights?metric=views,reach,likes,comments,shares,saved&access_token=${encodeURIComponent(token)}`,
     );
 
+    // Throw rather than return zeros, so a transient error doesn't overwrite real numbers
     if (!res.ok) {
-      return { likes: 0, comments: 0, shares: 0, impressions: 0, reach: 0, engagementRate: 0 };
+      throw await httpError('Instagram insights request failed', res);
     }
 
     const data = (await res.json()) as IGInsightsResponse;
@@ -178,8 +184,9 @@ export class InstagramAdapter extends BasePlatformAdapter {
       metrics[metric.name] = metric.values[0]?.value ?? 0;
     }
 
-    const impressions = metrics['impressions'] ?? 0;
-    const engagement = (metrics['likes'] ?? 0) + (metrics['comments'] ?? 0) + (metrics['shares'] ?? 0);
+    const impressions = metrics['views'] ?? 0;
+    const engagement = (metrics['likes'] ?? 0) + (metrics['comments'] ?? 0) + (metrics['shares'] ?? 0)
+      + (metrics['saved'] ?? 0);
 
     return {
       likes: metrics['likes'] ?? 0,

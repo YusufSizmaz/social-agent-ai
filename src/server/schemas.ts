@@ -74,7 +74,10 @@ export const generatePostSchema = z.object({
 });
 
 export const updatePostSchema = z.object({
-  status: postStatusSchema.optional(),
+  /** Clients may only park a post for review or approve it for scheduled publishing */
+  status: z.enum([PostStatus.REVIEW, PostStatus.SCHEDULED]).optional(),
+  /** When a scheduled post should go out; null or omitted means as soon as possible */
+  scheduledAt: z.coerce.date().nullable().optional(),
   text: z.string().max(10000).optional(),
   hashtags: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
 });

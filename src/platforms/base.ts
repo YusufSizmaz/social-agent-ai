@@ -14,10 +14,13 @@ export abstract class BasePlatformAdapter implements PlatformAdapter {
   protected abstract doDelete(platformPostId: string, accountId: string): Promise<boolean>;
   protected abstract doGetAnalytics(platformPostId: string, accountId: string): Promise<PostAnalyticsData>;
 
+  /**
+   * Not retried here: publishing isn't idempotent, and an error after the platform accepted the
+   * post (e.g. a timeout while reading the response) would create a duplicate. The job queue
+   * retries failed publish jobs with a backoff instead.
+   */
   async post(content: GeneratedContent, accountId: string): Promise<PlatformPostResult> {
-    return rateLimited(this.platform, accountId, () =>
-      withRetry(() => this.doPost(content, accountId), `${this.platform}.post`),
-    );
+    return rateLimited(this.platform, accountId, () => this.doPost(content, accountId));
   }
 
   async delete(platformPostId: string, accountId: string): Promise<boolean> {

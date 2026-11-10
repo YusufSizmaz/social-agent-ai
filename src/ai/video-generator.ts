@@ -194,114 +194,125 @@ export async function generateVideo(options: VideoOptions): Promise<string> {
   const hasBgMusic = !!(options.bgMusicPath && fs.existsSync(options.bgMusicPath));
   let finalAudioPath = audioPath;
 
-  if (hasBgMusic) {
-    const bgVol = options.bgMusicVolume ?? 0.6;
-    finalAudioPath = path.join(TEMP_DIR, `mix_${randomUUID()}.m4a`);
-    logger.debug('Mixing background music', { bgMusicPath: options.bgMusicPath, volume: bgVol });
-
-    const fadeOutStart = Math.max(0, audioDuration - 2);
-    await runFFmpeg([
-      '-y',
-      '-i', audioPath,
-      '-stream_loop', '-1', '-i', options.bgMusicPath!,
-      '-filter_complex',
-      `[0:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=1.0[voice];` +
-      `[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=${bgVol},afade=t=out:st=${fadeOutStart}:d=2[music];` +
-      `[voice][music]amix=inputs=2:duration=first:dropout_transition=2[out]`,
-      '-map', '[out]',
-      '-c:a', 'aac', '-b:a', '192k',
-      '-t', String(audioDuration),
-      finalAudioPath,
-    ]);
-  }
-
-  // Step 1: Ken Burns + audio → MP4
+  // Step 2 (subtitles/logo) runs only when there is something to burn in
   const displayText = options.subtitleText || text;
   const hasSubtitles = !!(displayText && displayText.length > 0);
   const hasLogo = !!(options.logoPath && fs.existsSync(options.logoPath));
   const needsStep2 = hasSubtitles || hasLogo;
-  const step1Output = needsStep2 ? path.join(TEMP_DIR, `kb_${randomUUID()}.mp4`) : outputPath;
 
-  logger.debug('FFmpeg step 1: Ken Burns', { duration: totalDuration, frames: totalFrames });
+  // Intermediate files are always removed; the output too if any step fails
+  const intermediates: string[] = [];
+  let succeeded = false;
+  try {
+    if (hasBgMusic) {
+      const bgVol = options.bgMusicVolume ?? 0.6;
+      finalAudioPath = path.join(TEMP_DIR, `mix_${randomUUID()}.m4a`);
+      intermediates.push(finalAudioPath);
+      logger.debug('Mixing background music', { bgMusicPath: options.bgMusicPath, volume: bgVol });
 
-  await runFFmpeg([
-    '-y',
-    '-loop', '1', '-i', imagePath,
-    '-i', finalAudioPath,
-    '-vf', kenBurns,
-    '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
-    '-c:a', 'aac', '-b:a', '192k',
-    '-shortest',
-    '-movflags', '+faststart',
-    step1Output,
-  ]);
-
-  // Step 2: Burn subtitles + logo overlay via filter_complex
-  if (needsStep2) {
-    const tempFiles: string[] = [step1Output];
-    const inputs = ['-i', step1Output];
-
-    let filterComplex = '';
-    let lastLabel = '0:v';
-
-    // Subtitles (use displayText for correct on-screen text)
-    if (hasSubtitles) {
-      const assPath = path.join(TEMP_DIR, `subs_${randomUUID()}.ass`);
-      generateASS(displayText!, audioDuration, assPath, width, height);
-      tempFiles.push(assPath);
-      filterComplex += `[${lastLabel}]ass='${escapeFilterValue(assPath)}'[sub];`;
-      lastLabel = 'sub';
+      const fadeOutStart = Math.max(0, audioDuration - 2);
+      await runFFmpeg([
+        '-y',
+        '-i', audioPath,
+        '-stream_loop', '-1', '-i', options.bgMusicPath!,
+        '-filter_complex',
+        `[0:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=1.0[voice];` +
+        `[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=${bgVol},afade=t=out:st=${fadeOutStart}:d=2[music];` +
+        // normalize=0: by default amix scales every input by 1/N, which halved the voiceover.
+        // The limiter keeps the unscaled sum from clipping.
+        `[voice][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0,alimiter=limit=0.95[out]`,
+        '-map', '[out]',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-t', String(audioDuration),
+        finalAudioPath,
+      ]);
     }
 
-    // Logo overlay + project name
-    if (hasLogo) {
-      inputs.push('-i', options.logoPath!);
-      const logoInputIdx = 1;
-      const logoSize = Math.round(width * 0.18);
-      const logoPad = Math.round(width * 0.03);
-      filterComplex += `[${logoInputIdx}:v]scale=${logoSize}:-1[logo];[${lastLabel}][logo]overlay=${logoPad}:${logoPad}[withlogo]`;
+    // Step 1: Ken Burns + audio → MP4
+    const step1Output = needsStep2 ? path.join(TEMP_DIR, `kb_${randomUUID()}.mp4`) : outputPath;
+    if (needsStep2) intermediates.push(step1Output);
 
-      if (options.projectName) {
-        const nameSize = Math.round(width * 0.028);
-        const nameY = logoPad + logoSize + Math.round(width * 0.012);
-        const nameCenterX = logoPad + Math.round(logoSize / 2);
-        const font = findFont();
-        const fontArg = font ? `:fontfile='${escapeFilterValue(font)}'` : '';
-        filterComplex += `;[withlogo]drawtext=text='${escapeFilterValue(options.projectName)}'${fontArg}:fontsize=${nameSize}:fontcolor=white:x=${nameCenterX}-text_w/2:y=${nameY}:shadowcolor=black@0.6:shadowx=1:shadowy=1[out]`;
-      } else {
-        filterComplex = filterComplex.replace(/\[withlogo\]$/, '[out]');
-      }
-      lastLabel = 'out';
-    }
-
-    // If no logo, rename last label to out
-    if (!hasLogo && filterComplex.endsWith(';')) {
-      filterComplex = filterComplex.slice(0, -1).replace(/\[sub\]$/, '[out]');
-      lastLabel = 'out';
-    }
-
-    logger.debug('FFmpeg step 2: Subtitles + Logo', { hasSubtitles, hasLogo });
+    logger.debug('FFmpeg step 1: Ken Burns', { duration: totalDuration, frames: totalFrames });
 
     await runFFmpeg([
       '-y',
-      ...inputs,
-      '-filter_complex', filterComplex,
-      '-map', `[${lastLabel}]`,
-      '-map', '0:a',
+      '-loop', '1', '-i', imagePath,
+      '-i', finalAudioPath,
+      '-vf', kenBurns,
       '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
-      '-c:a', 'copy',
+      '-c:a', 'aac', '-b:a', '192k',
+      '-shortest',
       '-movflags', '+faststart',
-      outputPath,
+      step1Output,
     ]);
 
-    // Cleanup temp files
-    for (const f of tempFiles) {
-      if (fs.existsSync(f)) fs.unlinkSync(f);
+    // Step 2: Burn subtitles + logo overlay via filter_complex
+    if (needsStep2) {
+      const inputs = ['-i', step1Output];
+
+      let filterComplex = '';
+      let lastLabel = '0:v';
+
+      // Subtitles (use displayText for correct on-screen text)
+      if (hasSubtitles) {
+        const assPath = path.join(TEMP_DIR, `subs_${randomUUID()}.ass`);
+        generateASS(displayText!, audioDuration, assPath, width, height);
+        intermediates.push(assPath);
+        filterComplex += `[${lastLabel}]ass='${escapeFilterValue(assPath)}'[sub];`;
+        lastLabel = 'sub';
+      }
+
+      // Logo overlay + project name
+      if (hasLogo) {
+        inputs.push('-i', options.logoPath!);
+        const logoInputIdx = 1;
+        const logoSize = Math.round(width * 0.18);
+        const logoPad = Math.round(width * 0.03);
+        filterComplex += `[${logoInputIdx}:v]scale=${logoSize}:-1[logo];[${lastLabel}][logo]overlay=${logoPad}:${logoPad}[withlogo]`;
+
+        if (options.projectName) {
+          const nameSize = Math.round(width * 0.028);
+          const nameY = logoPad + logoSize + Math.round(width * 0.012);
+          const nameCenterX = logoPad + Math.round(logoSize / 2);
+          const font = findFont();
+          const fontArg = font ? `:fontfile='${escapeFilterValue(font)}'` : '';
+          filterComplex += `;[withlogo]drawtext=text='${escapeFilterValue(options.projectName)}'${fontArg}:fontsize=${nameSize}:fontcolor=white:x=${nameCenterX}-text_w/2:y=${nameY}:shadowcolor=black@0.6:shadowx=1:shadowy=1[out]`;
+        } else {
+          filterComplex = filterComplex.replace(/\[withlogo\]$/, '[out]');
+        }
+        lastLabel = 'out';
+      }
+
+      // If no logo, rename last label to out
+      if (!hasLogo && filterComplex.endsWith(';')) {
+        filterComplex = filterComplex.slice(0, -1).replace(/\[sub\]$/, '[out]');
+        lastLabel = 'out';
+      }
+
+      logger.debug('FFmpeg step 2: Subtitles + Logo', { hasSubtitles, hasLogo });
+
+      await runFFmpeg([
+        '-y',
+        ...inputs,
+        '-filter_complex', filterComplex,
+        '-map', `[${lastLabel}]`,
+        '-map', '0:a',
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+        '-c:a', 'copy',
+        '-movflags', '+faststart',
+        outputPath,
+      ]);
+    }
+    succeeded = true;
+  } finally {
+    for (const f of succeeded ? intermediates : [...intermediates, outputPath]) {
+      try {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      } catch {
+        // ignore cleanup errors
+      }
     }
   }
-
-  // Cleanup mixed audio
-  if (hasBgMusic && fs.existsSync(finalAudioPath)) fs.unlinkSync(finalAudioPath);
 
   logger.debug('Video generated', { outputPath, duration: totalDuration, subtitles: hasSubtitles, logo: hasLogo, bgMusic: hasBgMusic });
   return outputPath;

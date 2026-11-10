@@ -62,10 +62,12 @@ export function checkContentSafety(
     score -= 15;
   }
 
+  let bannedWordFound = false;
   for (const [word, pattern] of BANNED_PATTERNS) {
     if (pattern.test(fullText)) {
       reasons.push(`Banned word detected: "${word}"`);
       score -= 25;
+      bannedWordFound = true;
     }
   }
 
@@ -75,7 +77,8 @@ export function checkContentSafety(
   }
 
   score = Math.max(0, score);
-  const safe = score >= SAFETY_MIN_SCORE;
+  // A banned word is a hard block, whatever the rest of the score looks like
+  const safe = score >= SAFETY_MIN_SCORE && !bannedWordFound;
 
   if (!safe) {
     logger.warn('Content failed safety check', { score, reasons });

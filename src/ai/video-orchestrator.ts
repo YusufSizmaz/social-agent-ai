@@ -29,107 +29,127 @@ export async function createVideoContent(request: ContentRequest): Promise<Video
   const textContent = await generateText(request);
   logger.info('Video pipeline — text generated', { length: textContent.text.length });
 
-  // Step 2: TTS — convert text to audio (voice from project config, else picked by language)
-  const context = request.context as Record<string, unknown> | undefined;
-  const configuredVoice = (context?.['projectConfig'] as Record<string, unknown> | undefined)?.['ttsVoice'];
-  const voice = typeof configuredVoice === 'string' && configuredVoice
-    ? configuredVoice
-    : voiceForLanguage(context?.['language'] as string | undefined);
-  const audioPath = await textToSpeech(textContent.text, voice, '+0%');
-  logger.info('Video pipeline — TTS completed', { audioPath });
-
-  // Step 3: Background image
-  let imagePath: string;
-
-  // Try AI image first, then Pexels fallback
-  const imagePrompt = buildImagePrompt(request, textContent.text);
+  // Intermediate files are removed if any later step fails; on success the caller cleans them up
+  let audioPath: string | undefined;
+  let imagePath: string | undefined;
   try {
-    // For YouTube Shorts: 1080x1920 (vertical)
+    // Step 2: TTS — convert text to audio (voice from project config, else picked by language)
+    const context = request.context as Record<string, unknown> | undefined;
+    const configuredVoice = (context?.['projectConfig'] as Record<string, unknown> | undefined)?.['ttsVoice'];
+    const voice = typeof configuredVoice === 'string' && configuredVoice
+      ? configuredVoice
+      : voiceForLanguage(context?.['language'] as string | undefined);
+    audioPath = await textToSpeech(textContent.text, voice, '+0%');
+    logger.info('Video pipeline — TTS completed', { audioPath });
+
+    // Step 3: Background image — vertical for Shorts/Reels (1080x1920)
     const isVertical = request.contentType === ContentType.SHORT || request.contentType === ContentType.REEL;
     const width = isVertical ? 1080 : 1920;
     const height = isVertical ? 1920 : 1080;
+    imagePath = await generateBackgroundImage(request, textContent.text, width, height);
 
-    imagePath = await generateImage(imagePrompt, width, height);
-    logger.info('Video pipeline — AI image generated', { imagePath });
+    // Step 4: Assemble video with Ken Burns + subtitles + logo
+    // Resolve logo + bgMusic from project config
+    let logoPath: string | undefined;
+    let bgMusicPath: string | undefined;
+    const projectConfig = context?.['projectConfig'] as Record<string, unknown> | undefined;
+    if (projectConfig?.logoUrl && typeof projectConfig.logoUrl === 'string') {
+      const resolved = path.resolve('public', (projectConfig.logoUrl as string).replace(/^\/public\//, ''));
+      if (fs.existsSync(resolved)) logoPath = resolved;
+    }
+    if (projectConfig?.bgMusicPath && typeof projectConfig.bgMusicPath === 'string') {
+      const resolved = path.resolve('public', (projectConfig.bgMusicPath as string).replace(/^\/public\//, ''));
+      if (fs.existsSync(resolved)) bgMusicPath = resolved;
+    }
+
+    // Build display text for subtitles: replace phonetic spellings back to brand names
+    const subtitleReplacements = (projectConfig?.subtitleReplacements ?? {}) as Record<string, string>;
+    let subtitleText = textContent.text;
+    for (const [from, to] of Object.entries(subtitleReplacements)) {
+      subtitleText = subtitleText.replaceAll(from, to);
+    }
+
+    // Resolve project name for logo text overlay
+    const projectName = context?.['projectName'] as string | undefined;
+
+    const videoPath = await generateVideo({
+      imagePath,
+      audioPath,
+      text: textContent.text,
+      subtitleText,
+      width,
+      height,
+      logoPath,
+      projectName,
+      bgMusicPath,
+      bgMusicVolume: (projectConfig?.bgMusicVolume as number) ?? 0.6,
+    });
+
+    logger.info('Video pipeline completed', { videoPath });
+
+    return {
+      text: textContent.text,
+      hashtags: textContent.hashtags,
+      mediaUrls: [videoPath],
+      metadata: textContent.metadata,
+      videoPath,
+      audioPath,
+      imagePath,
+    };
+  } catch (err) {
+    removeFiles([audioPath, imagePath]);
+    throw err;
+  }
+}
+
+/**
+ * Generates an image for the content with Imagen, falling back to a Pexels stock photo.
+ * Returns the path of a temp file the caller is responsible for removing.
+ */
+export async function generateBackgroundImage(
+  request: ContentRequest,
+  text: string,
+  width: number,
+  height: number,
+): Promise<string> {
+  const imagePrompt = buildImagePrompt(request, text);
+  try {
+    const imagePath = await generateImage(imagePrompt, width, height);
+    logger.info('AI image generated', { imagePath });
+    return imagePath;
   } catch (err) {
     logger.warn('AI image failed, falling back to Pexels', {
       error: err instanceof Error ? err.message : String(err),
     });
 
-    const searchQuery = extractSearchQuery(request);
-    const pexelsImages = await searchPexelsImage(searchQuery, 1);
+    const pexelsImages = await searchPexelsImage(extractSearchQuery(request), 1);
     if (pexelsImages.length === 0) {
-      throw new Error('Could not generate or find a background image for video');
+      throw new Error(
+        'Could not generate or find an image — Imagen failed (it requires a billing-enabled Gemini key) '
+        + 'and no Pexels image was available (set PEXELS_API_KEY)',
+      );
     }
-    imagePath = pexelsImages[0]!;
-    logger.info('Video pipeline — Pexels image found', { imagePath });
+    logger.info('Pexels image found', { imagePath: pexelsImages[0] });
+    return pexelsImages[0]!;
   }
+}
 
-  // Step 4: Assemble video with Ken Burns + subtitles + logo
-  const isVertical = request.contentType === ContentType.SHORT || request.contentType === ContentType.REEL;
-
-  // Resolve logo + bgMusic from project config
-  let logoPath: string | undefined;
-  let bgMusicPath: string | undefined;
-  const projectConfig = (request.context as Record<string, unknown> | undefined)?.['projectConfig'] as Record<string, unknown> | undefined;
-  if (projectConfig?.logoUrl && typeof projectConfig.logoUrl === 'string') {
-    const resolved = path.resolve('public', (projectConfig.logoUrl as string).replace(/^\/public\//, ''));
-    if (fs.existsSync(resolved)) logoPath = resolved;
+function removeFiles(filePaths: Array<string | undefined>): void {
+  for (const filePath of filePaths) {
+    if (!filePath) continue;
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {
+      // ignore cleanup errors
+    }
   }
-  if (projectConfig?.bgMusicPath && typeof projectConfig.bgMusicPath === 'string') {
-    const resolved = path.resolve('public', (projectConfig.bgMusicPath as string).replace(/^\/public\//, ''));
-    if (fs.existsSync(resolved)) bgMusicPath = resolved;
-  }
-
-  // Build display text for subtitles: replace phonetic spellings back to brand names
-  const subtitleReplacements = (projectConfig?.subtitleReplacements ?? {}) as Record<string, string>;
-  let subtitleText = textContent.text;
-  for (const [from, to] of Object.entries(subtitleReplacements)) {
-    subtitleText = subtitleText.replaceAll(from, to);
-  }
-
-  // Resolve project name for logo text overlay
-  const projectName = (request.context as Record<string, unknown> | undefined)?.['projectName'] as string | undefined;
-
-  const videoPath = await generateVideo({
-    imagePath,
-    audioPath,
-    text: textContent.text,
-    subtitleText,
-    width: isVertical ? 1080 : 1920,
-    height: isVertical ? 1920 : 1080,
-    logoPath,
-    projectName,
-    bgMusicPath,
-    bgMusicVolume: (projectConfig?.bgMusicVolume as number) ?? 0.6,
-  });
-
-  logger.info('Video pipeline completed', { videoPath });
-
-  return {
-    text: textContent.text,
-    hashtags: textContent.hashtags,
-    mediaUrls: [videoPath],
-    metadata: textContent.metadata,
-    videoPath,
-    audioPath,
-    imagePath,
-  };
 }
 
 /**
  * Clean up temp files created by the video pipeline.
  */
 export function cleanupVideoFiles(result: VideoContentResult): void {
-  for (const filePath of [result.videoPath, result.audioPath, result.imagePath]) {
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-    } catch {
-      // ignore cleanup errors
-    }
-  }
+  removeFiles([result.videoPath, result.audioPath, result.imagePath]);
 }
 
 const NO_TEXT_INSTRUCTION = 'Do NOT include any text, letters, words, watermarks, or typography in the image.';

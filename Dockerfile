@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     fonts-liberation \
     fonts-dejavu-core \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
@@ -36,7 +37,7 @@ COPY package.json ./
 COPY drizzle ./drizzle
 
 # Run as an unprivileged user; pre-create writable dirs so named volumes inherit ownership
-RUN mkdir -p temp public .wwebjs_auth && chown -R node:node temp public .wwebjs_auth
+RUN mkdir -p temp public .wwebjs_auth .wwebjs_cache && chown -R node:node temp public .wwebjs_auth .wwebjs_cache
 USER node
 
 EXPOSE 3000

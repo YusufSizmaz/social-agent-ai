@@ -4,6 +4,7 @@ import { logger } from '../config/logger.js';
 import { withRetry } from '../core/retry.js';
 import type { ContentRequest, GeneratedContent } from '../types/index.js';
 import { buildGenerationPrompt } from './prompt-builder.js';
+import { assertCompleteResponse, thinkingConfigFor } from './gemini.js';
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
@@ -19,7 +20,8 @@ export async function generateText(request: ContentRequest): Promise<GeneratedCo
       config: {
         temperature: 0.8,
         topP: 0.9,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 4096,
+        thinkingConfig: thinkingConfigFor(env.GEMINI_MODEL),
         responseMimeType: 'application/json',
         responseSchema: {
           type: 'object' as const,
@@ -35,6 +37,8 @@ export async function generateText(request: ContentRequest): Promise<GeneratedCo
         },
       },
     });
+
+    assertCompleteResponse(response, 'generateText');
 
     const raw = response.text;
     if (!raw) {

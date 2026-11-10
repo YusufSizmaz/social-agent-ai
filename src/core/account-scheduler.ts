@@ -26,7 +26,12 @@ export async function syncAccountCrons(): Promise<void> {
       strategy: schema.accounts.strategy,
     })
     .from(schema.accounts)
-    .where(and(eq(schema.accounts.active, true), isNotNull(schema.accounts.strategy)));
+    .innerJoin(schema.projects, eq(schema.projects.id, schema.accounts.projectId))
+    .where(and(
+      eq(schema.accounts.active, true),
+      eq(schema.projects.active, true),
+      isNotNull(schema.accounts.strategy),
+    ));
 
   const wanted = new Set<string>();
   let registered = 0;
@@ -44,6 +49,7 @@ export async function syncAccountCrons(): Promise<void> {
       logger.info(`Cron triggered for account ${account.id} (${account.platform})`, {
         accountId: account.id,
       });
+      // The job re-reads the account's current strategy when it runs; this copy is only a fallback
       await enqueueJob(JobType.GENERATE_CONTENT, {
         accountId: account.id,
         projectId: account.projectId,
