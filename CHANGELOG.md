@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Bumped `drizzle-orm` to 0.45 (SQL injection via improperly escaped identifiers) and `zod` to 4 (memory exhaustion on oversized collections); `npm audit fix` for critical `protobufjs` and `proxy-addr` advisories plus `multer`, `ws`, `axios`, `body-parser` and `form-data`.
 - Dashboard HTML escaping now covers quotes, closing an attribute-injection XSS through project names, usernames and AI-generated hashtags.
 - Password comparison no longer leaks the password length.
+- Database errors no longer leak query parameters (e.g. account credentials) into logs, post error messages or WhatsApp notifications — drizzle 0.45 puts them in its error message.
 - The Twitter OAuth flow can only be started for Twitter accounts (it used to overwrite any account's credentials).
 
 ### Added

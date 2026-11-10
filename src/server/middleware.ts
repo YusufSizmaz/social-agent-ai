@@ -3,7 +3,7 @@ import multer from 'multer';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { z, type ZodTypeAny } from 'zod';
 import { logger } from '../config/logger.js';
-import { errorMessage, isConnectionRefused } from '../core/errors.js';
+import { errorCode, errorMessage, errorStack, isConnectionRefused } from '../core/errors.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -81,7 +81,7 @@ function statusFor(err: unknown): number {
   if (err instanceof multer.MulterError) {
     return err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
   }
-  const pgCode = (err as { code?: unknown })?.code;
+  const pgCode = errorCode(err);
   if (pgCode === '23505') return 409; // unique_violation
   if (pgCode === '23503') return 409; // foreign_key_violation
   return (err as { status?: number })?.status
@@ -91,7 +91,7 @@ function statusFor(err: unknown): number {
 
 function clientMessage(err: unknown, status: number): string {
   if (status >= 500) return 'Internal server error';
-  const pgCode = (err as { code?: unknown })?.code;
+  const pgCode = errorCode(err);
   if (pgCode === '23505') return 'A record with the same unique value already exists';
   if (pgCode === '23503') return 'The record is referenced by, or references, another record';
   return err instanceof Error ? err.message : 'Bad request';
@@ -103,7 +103,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   if (status >= 500) {
     logger.error(`${req.method} ${req.path} failed`, {
       error: errorMessage(err),
-      ...(isConnectionRefused(err) ? {} : { stack: err instanceof Error ? err.stack : undefined }),
+      ...(isConnectionRefused(err) ? {} : { stack: errorStack(err) }),
     });
   }
 

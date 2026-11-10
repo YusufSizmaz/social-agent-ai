@@ -1,5 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { logger } from '../config/logger.js';
+import { errorMessage } from './errors.js';
 
 interface ScheduledJob {
   name: string;
@@ -33,7 +34,7 @@ export function registerCron(name: string, expression: string, fn: () => void | 
     try {
       await fn();
     } catch (err) {
-      logger.error(`Cron job "${name}" failed`, { error: err instanceof Error ? err.message : String(err) });
+      logger.error(`Cron job "${name}" failed`, { error: errorMessage(err) });
     }
   // A fixed name makes node-cron's global task registry overwrite instead of growing on re-registration.
   // Schedules run in the process timezone — set TZ (e.g. TZ=Europe/Istanbul) to change it.

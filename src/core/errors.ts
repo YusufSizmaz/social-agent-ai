@@ -6,7 +6,28 @@ export class NonRetryableError extends Error {
   }
 }
 
+/**
+ * drizzle-orm wraps driver errors in a DrizzleQueryError ("Failed query: <sql> params: <values>")
+ * and keeps the PostgreSQL error as `cause`. Returns that underlying error, or the error itself.
+ */
+function rootError(err: unknown): unknown {
+  let current = err;
+  for (let depth = 0; depth < 5; depth++) {
+    const cause = (current as { cause?: unknown } | null)?.cause;
+    if (!(current instanceof Error) || !current.message.startsWith('Failed query:') || cause === undefined) break;
+    current = cause;
+  }
+  return current;
+}
+
+/** Error code (e.g. PostgreSQL SQLSTATE '23505' or 'ECONNREFUSED'), looking through drizzle's wrapper */
+export function errorCode(err: unknown): unknown {
+  return (rootError(err) as { code?: unknown } | null)?.code;
+}
+
 export function errorMessage(err: unknown): string {
+  // Never surface drizzle's "Failed query" text: it includes the query parameters (e.g. credentials)
+  err = rootError(err);
   if (!(err instanceof Error)) return String(err);
   if (err.message) return err.message;
   // Node reports failed multi-address connections as an AggregateError with an empty message
@@ -15,9 +36,15 @@ export function errorMessage(err: unknown): string {
   return inner?.message ?? (typeof code === 'string' ? code : err.name);
 }
 
+/** Stack trace of the underlying error (drizzle's wrapper stack starts with the query parameters) */
+export function errorStack(err: unknown): string | undefined {
+  const root = rootError(err);
+  return root instanceof Error ? root.stack : undefined;
+}
+
 /** True when the error means PostgreSQL could not be reached at all */
 export function isConnectionRefused(err: unknown): boolean {
-  const code = (err as { code?: unknown } | null)?.code;
+  const code = errorCode(err);
   return code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT';
 }
 

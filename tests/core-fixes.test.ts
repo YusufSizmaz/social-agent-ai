@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { retimeCron } from '../src/core/strategy-optimizer.js';
-import { DeferJobError, isRetryable, rateLimitBackoffMs } from '../src/core/errors.js';
+import { DeferJobError, errorCode, errorMessage, errorStack, isConnectionRefused, isRetryable, rateLimitBackoffMs } from '../src/core/errors.js';
 import { updatePostSchema } from '../src/server/schemas.js';
 
 describe('retimeCron', () => {
@@ -64,5 +64,24 @@ describe('updatePostSchema', () => {
     expect(parsed.scheduledAt).toEqual(new Date('2030-01-01T09:00:00.000Z'));
     expect(updatePostSchema.parse({ scheduledAt: null }).scheduledAt).toBeNull();
     expect(updatePostSchema.safeParse({ scheduledAt: 'not a date' }).success).toBe(false);
+  });
+});
+
+describe('drizzle-wrapped errors', () => {
+  // drizzle-orm >= 0.44 wraps driver errors: message holds the SQL and params, `cause` the pg error
+  const pgError = Object.assign(new Error('duplicate key value violates unique constraint "projects_name_unique"'), { code: '23505' });
+  const wrapped = Object.assign(
+    new Error('Failed query: update "accounts" set "credentials" = $1\nparams: {"apiSecret":"s3cret"}'),
+    { cause: pgError },
+  );
+
+  it('exposes the PostgreSQL error code', () => {
+    expect(errorCode(wrapped)).toBe('23505');
+    expect(isConnectionRefused(Object.assign(new Error('Failed query: select 1'), { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }))).toBe(true);
+  });
+
+  it('never leaks query parameters into messages or stacks', () => {
+    expect(errorMessage(wrapped)).toBe(pgError.message);
+    expect(errorStack(wrapped)).not.toContain('s3cret');
   });
 });

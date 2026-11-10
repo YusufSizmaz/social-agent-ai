@@ -1,6 +1,6 @@
 import { RETRY_CONFIG } from '../config/constants.js';
 import { logger } from '../config/logger.js';
-import { httpStatus, isRetryable } from './errors.js';
+import { errorMessage, httpStatus, isRetryable } from './errors.js';
 
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -24,7 +24,7 @@ export async function withRetry<T>(
       );
 
       logger.warn(`Retry ${attempt + 1}/${maxRetries} for "${label}" in ${Math.round(delay)}ms`, {
-        error: err instanceof Error ? err.message : String(err),
+        error: errorMessage(err),
       });
 
       await new Promise((resolve) => setTimeout(resolve, delay));
