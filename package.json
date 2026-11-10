@@ -48,7 +48,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
-    "dotenv": "^16.4.7",
+    "dotenv": "^18.0.9",
     "drizzle-orm": "^0.45.4",
     "edge-tts-universal": "^1.4.0",
     "express": "^5.2.1",
