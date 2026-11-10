@@ -1,15 +1,15 @@
-import { eq, and, ne, gte, sql, isNotNull, asc } from 'drizzle-orm';
-import { Platform, ContentType, QUEUE_POLL_INTERVAL_MS, JobType } from '../config/constants.js';
+import { eq, and, ne, gte, sql, isNotNull, asc, min, count } from 'drizzle-orm';
+import { Platform, ContentType, QUEUE_POLL_INTERVAL_MS, JobType, RATE_LIMITS } from '../config/constants.js';
 import { logger } from '../config/logger.js';
 import type { PlatformAdapter, ProjectPlugin, ContentRequest, GeneratedContent, AccountStrategy } from '../types/index.js';
-import { dequeueJob, completeJob, failJob, enqueueJob, recoverStaleJobs, type Job } from './queue.js';
+import { dequeueJob, completeJob, failJob, deferJob, enqueueJob, recoverStaleJobs, type Job } from './queue.js';
 import { startAllCrons, stopAllCrons, registerCron } from './scheduler.js';
 import { syncAccountCrons } from './account-scheduler.js';
 import { generateText } from '../ai/text-generator.js';
 import { createContent, failsQualityGate, type CreatedContent } from './content-service.js';
 import { checkContentSafety, fitToPlatform } from './safety-guard.js';
 import { pickContentAction, mergeHashtags } from './content-mix.js';
-import { NonRetryableError, errorMessage, isRetryable } from './errors.js';
+import { DeferJobError, NonRetryableError, errorMessage, isRetryable, rateLimitBackoffMs } from './errors.js';
 import { db, schema } from '../db/index.js';
 import { notifyPostPublished, notifyPostFailed, notifyContentGenerated, notifyDailySummary } from '../notifications/whatsapp.js';
 import { trackAllPublishedPosts, trackPostAnalytics } from '../analytics/tracker.js';
@@ -22,6 +22,8 @@ type ToneValue = NonNullable<typeof schema.posts.$inferInsert['tone']>;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHUTDOWN_GRACE_MS = 60_000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 interface NewPost {
   projectId: string;
@@ -91,6 +93,7 @@ export class Engine {
     registerCron('daily-report', '0 23 * * *', () => this.sendDailyReport());
     registerCron('optimize-strategies', '0 2 * * 1', () => optimizeStrategies());
     registerCron('recover-stale-jobs', '*/10 * * * *', async () => { await recoverStaleJobs(); });
+    registerCron('publish-scheduled-posts', '* * * * *', async () => { await this.queueDueScheduledPosts(); });
 
     await syncAccountCrons();
 
@@ -183,8 +186,15 @@ export class Engine {
       await completeJob(job.id);
     } catch (err) {
       const message = errorMessage(err);
+
+      if (err instanceof DeferJobError) {
+        await deferJob(job.id, err.runAt, message);
+        logger.info(`Job ${job.id} deferred until ${err.runAt.toISOString()}`, { reason: message });
+        return true;
+      }
+
       const canRetry = isRetryable(err) && job.attempts < job.maxAttempts;
-      await failJob(job.id, message, canRetry, job.attempts);
+      await failJob(job.id, message, canRetry, job.attempts, rateLimitBackoffMs(err));
 
       if (canRetry) {
         logger.warn(`Job ${job.id} failed, will retry`, { error: message, attempt: job.attempts });
@@ -309,27 +319,38 @@ export class Engine {
   private async saveAndQueue(post: NewPost): Promise<string> {
     const holdForReview = failsQualityGate(post.content);
 
-    const [created] = await db
-      .insert(schema.posts)
-      .values({
-        projectId: post.projectId,
-        accountId: post.accountId,
-        platform: post.platform as PlatformValue,
-        contentType: post.contentType as ContentTypeValue,
-        text: post.content.text,
-        hashtags: post.content.hashtags,
-        mediaUrls: post.content.mediaUrls,
-        status: holdForReview ? 'review' : 'publishing',
-        tone: post.tone,
-        qualityScore: post.content.qualityScore,
-        metadata: {
-          source: post.source,
-          ...(post.content.qualityFeedback ? { qualityFeedback: post.content.qualityFeedback } : {}),
-        },
-      })
-      .returning({ id: schema.posts.id });
+    // Insert and enqueue together, so a failure can't leave a post in "publishing" with no job
+    const postId = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(schema.posts)
+        .values({
+          projectId: post.projectId,
+          accountId: post.accountId,
+          platform: post.platform as PlatformValue,
+          contentType: post.contentType as ContentTypeValue,
+          text: post.content.text,
+          hashtags: post.content.hashtags,
+          mediaUrls: post.content.mediaUrls,
+          status: holdForReview ? 'review' : 'publishing',
+          tone: post.tone,
+          qualityScore: post.content.qualityScore,
+          metadata: {
+            source: post.source,
+            ...(post.content.qualityFeedback ? { qualityFeedback: post.content.qualityFeedback } : {}),
+          },
+        })
+        .returning({ id: schema.posts.id });
 
-    const postId = created!.id;
+      if (!holdForReview) {
+        await enqueueJob(JobType.PUBLISH_POST, {
+          postId: created!.id,
+          platform: post.platform,
+          accountId: post.accountId,
+        }, { tx });
+      }
+      return created!.id;
+    });
+
     const username = await this.getAccountUsername(post.accountId);
 
     logger.info(`Content generated (${post.source})`, {
@@ -348,23 +369,44 @@ export class Engine {
 
     if (holdForReview) {
       logger.warn(`Post ${postId} scored ${post.content.qualityScore} and was held for manual review`);
-      return postId;
     }
-
-    await enqueueJob(JobType.PUBLISH_POST, {
-      postId,
-      platform: post.platform,
-      accountId: post.accountId,
-    });
 
     return postId;
   }
 
   private async handleStrategyGeneration(payload: Record<string, unknown>): Promise<void> {
     const accountId = payload['accountId'] as string;
-    const projectId = payload['projectId'] as string;
-    const platform = payload['platform'] as Platform;
-    const strategy = payload['strategy'] as AccountStrategy;
+
+    // The job may have waited in the queue: act on the account as it is now, not as it was when queued
+    const [current] = await db
+      .select({
+        projectId: schema.accounts.projectId,
+        platform: schema.accounts.platform,
+        active: schema.accounts.active,
+        strategy: schema.accounts.strategy,
+        projectActive: schema.projects.active,
+      })
+      .from(schema.accounts)
+      .innerJoin(schema.projects, eq(schema.projects.id, schema.accounts.projectId))
+      .where(eq(schema.accounts.id, accountId))
+      .limit(1);
+
+    const strategy = current?.strategy as AccountStrategy | null | undefined;
+    if (!current || !current.active || !current.projectActive || !strategy?.active) {
+      logger.info(`Skipping strategy run for account ${accountId}: account, project or strategy is no longer active`);
+      return;
+    }
+
+    const projectId = current.projectId;
+    const platform = current.platform as Platform;
+
+    const limitReachedUntil = await this.publishLimitReachedUntil(accountId, platform);
+    if (limitReachedUntil) {
+      logger.info(`Skipping strategy run for account ${accountId}: ${platform} publishing limit reached`, {
+        nextSlot: limitReachedUntil.toISOString(),
+      });
+      return;
+    }
 
     const action = pickContentAction(strategy.contentMix, Math.random());
 
@@ -444,7 +486,8 @@ export class Engine {
           ne(schema.posts.accountId, accountId),
           gte(schema.posts.publishedAt, twentyFourHoursAgo),
           isNotNull(schema.posts.platformPostId),
-          sql`NOT (COALESCE(${schema.posts.metadata}, '{}'::jsonb) ? 'repostOf')`,
+          // Only original posts: replying to or reposting sibling replies creates bot-to-bot chains
+          sql`NOT (COALESCE(${schema.posts.metadata}, '{}'::jsonb) ?| array['repostOf', 'replyTo'])`,
         ),
       );
   }
@@ -625,8 +668,9 @@ export class Engine {
         logger.warn(`Post ${postId} no longer exists, skipping publish`);
         return;
       }
-      if (post.status === 'published') {
-        logger.info(`Post ${postId} is already published, skipping`);
+      if (post.status !== 'publishing') {
+        // Published already, or moved back to review/scheduled from the dashboard after it was queued
+        logger.info(`Post ${postId} is "${post.status}", not publishing`);
         return;
       }
       content = { text: post.text, hashtags: post.hashtags ?? [], mediaUrls: post.mediaUrls ?? [], metadata: post.metadata ?? {} };
@@ -653,6 +697,11 @@ export class Engine {
       const message = `No adapter for platform "${platform}" — configure its credentials in .env`;
       await fail(message, true);
       throw new NonRetryableError(message);
+    }
+
+    const limitReachedUntil = await this.publishLimitReachedUntil(accountId, platform, postId);
+    if (limitReachedUntil) {
+      throw new DeferJobError(`${platform} publishing limit reached for this account`, limitReachedUntil);
     }
 
     content = fitToPlatform(content, platform);
@@ -706,6 +755,62 @@ export class Engine {
       platformUrl: result.url,
       platformPostId: result.platformPostId,
     });
+  }
+
+  /**
+   * Enforces RATE_LIMITS[platform].maxPerHour / maxPerDay per account, counting everything the
+   * account published (posts, replies and reposts). Returns when the next slot opens, or null.
+   */
+  private async publishLimitReachedUntil(accountId: string, platform: Platform, excludePostId?: string): Promise<Date | null> {
+    const limits = RATE_LIMITS[platform];
+    if (!limits) return null;
+
+    const now = Date.now();
+    for (const [windowMs, max] of [[HOUR_MS, limits.maxPerHour], [DAY_MS, limits.maxPerDay]] as const) {
+      const [row] = await db
+        .select({ published: count(), oldest: min(schema.posts.publishedAt) })
+        .from(schema.posts)
+        .where(and(
+          eq(schema.posts.accountId, accountId),
+          eq(schema.posts.status, 'published'),
+          gte(schema.posts.publishedAt, new Date(now - windowMs)),
+          excludePostId ? ne(schema.posts.id, excludePostId) : undefined,
+        ));
+
+      if (row && row.published >= max) {
+        const oldest = row.oldest ? new Date(row.oldest).getTime() : now;
+        return new Date(Math.max(oldest + windowMs, now) + 60_000);
+      }
+    }
+    return null;
+  }
+
+  /** Queues approved ("scheduled") posts whose publish time has come. Runs every minute. */
+  async queueDueScheduledPosts(): Promise<number> {
+    const queued = await db.transaction(async (tx) => {
+      const due = await tx
+        .update(schema.posts)
+        .set({ status: 'publishing', errorMessage: null, updatedAt: new Date() })
+        .where(and(
+          eq(schema.posts.status, 'scheduled'),
+          sql`(${schema.posts.scheduledAt} IS NULL OR ${schema.posts.scheduledAt} <= NOW())`,
+        ))
+        .returning({ id: schema.posts.id, platform: schema.posts.platform, accountId: schema.posts.accountId });
+
+      for (const post of due) {
+        await enqueueJob(JobType.PUBLISH_POST, {
+          postId: post.id,
+          platform: post.platform,
+          accountId: post.accountId,
+        }, { tx });
+      }
+      return due.length;
+    });
+
+    if (queued > 0) {
+      logger.info(`Queued ${queued} scheduled post(s) for publishing`);
+    }
+    return queued;
   }
 
   private async sendDailyReport(): Promise<void> {

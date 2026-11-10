@@ -1,6 +1,6 @@
 import { RETRY_CONFIG } from '../config/constants.js';
 import { logger } from '../config/logger.js';
-import { isRetryable } from './errors.js';
+import { httpStatus, isRetryable } from './errors.js';
 
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -15,7 +15,8 @@ export async function withRetry<T>(
     } catch (err) {
       lastError = err;
 
-      if (attempt === maxRetries || !isRetryable(err)) break;
+      // A 429 won't clear within a few seconds; let the job queue reschedule after the reset time
+      if (attempt === maxRetries || !isRetryable(err) || httpStatus(err) === 429) break;
 
       const delay = Math.min(
         RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt) + Math.random() * 1000,

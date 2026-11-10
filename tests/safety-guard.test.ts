@@ -61,6 +61,12 @@ describe('checkContentSafety', () => {
     expect(result.reasons).toContain('Banned word detected: "terör"');
   });
 
+  it('blocks content with a single banned word even when the rest scores well', () => {
+    const result = checkContentSafety({ text: 'Yeni casino kampanyası başladı', hashtags: [] }, Platform.INSTAGRAM);
+    expect(result.score).toBeGreaterThanOrEqual(60);
+    expect(result.safe).toBe(false);
+  });
+
   it('does not flag banned words embedded inside other words', () => {
     const result = checkContentSafety({ text: 'Our minicasinoless event', hashtags: [] }, Platform.INSTAGRAM);
     expect(result.reasons).toEqual([]);

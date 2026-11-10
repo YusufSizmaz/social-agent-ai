@@ -37,13 +37,6 @@ function registerPlugins(): void {
 async function main(): Promise<void> {
   logger.info('Social Agent AI starting...');
 
-  const dbReady = await checkDatabaseConnection();
-
-  if (env.RUN_MIGRATIONS && dbReady) {
-    logger.info('Applying database migrations...');
-    await runMigrations();
-  }
-
   const server = startServer();
 
   let shuttingDown = false;
@@ -81,11 +74,27 @@ async function main(): Promise<void> {
   registerAdapters();
   registerPlugins();
 
-  try {
-    await engine.start();
-    logger.info('Social Agent AI is running');
-  } catch (err) {
-    logger.error('Engine start failed, web panel is still available', { error: errorMessage(err) });
+  // The database may come up after us (e.g. Postgres restarting): keep trying instead of
+  // leaving the web panel up with a stopped engine until someone restarts the process.
+  let migrated = !env.RUN_MIGRATIONS;
+  for (let attempt = 1; !shuttingDown; attempt++) {
+    try {
+      if (!(await checkDatabaseConnection())) throw new Error('Database is not reachable');
+      if (!migrated) {
+        logger.info('Applying database migrations...');
+        await runMigrations();
+        migrated = true;
+      }
+      await engine.start();
+      logger.info('Social Agent AI is running');
+      return;
+    } catch (err) {
+      const delayMs = Math.min(5_000 * 2 ** (attempt - 1), 60_000);
+      logger.error(`Engine start failed (attempt ${attempt}), retrying in ${delayMs / 1000}s — web panel is still available`, {
+        error: errorMessage(err),
+      });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 }
 

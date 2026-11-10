@@ -6,6 +6,7 @@ import fs from 'fs';
 import { randomUUID } from 'crypto';
 import { db, schema } from '../../db/index.js';
 import { syncAccountCrons } from '../../core/account-scheduler.js';
+import { logger } from '../../config/logger.js';
 import { PUBLIC_DIR, ensureDir, publicUrlToPath } from '../../core/media.js';
 import { asyncHandler, parseBody, requireUuidParam } from '../middleware.js';
 import { createProjectSchema, updateProjectSchema } from '../schemas.js';
@@ -151,6 +152,13 @@ projectsRouter.patch('/:id', asyncHandler(async (req, res) => {
     })
     .where(eq(schema.projects.id, id))
     .returning();
+
+  // Activating or deactivating a project starts or stops its accounts' strategy crons
+  if (body.active !== undefined) {
+    await syncAccountCrons().catch((err) => {
+      logger.error('Failed to resync account crons', { error: err instanceof Error ? err.message : String(err) });
+    });
+  }
 
   res.json(updated);
 }));
