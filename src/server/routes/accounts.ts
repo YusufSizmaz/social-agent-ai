@@ -87,16 +87,22 @@ accountsRouter.patch('/:id', asyncHandler(async (req, res) => {
   const updates = parseBody(updateAccountSchema, req, res);
   if (!updates) return;
 
+  const changes = {
+    ...(updates.active !== undefined ? { active: updates.active } : {}),
+    ...(updates.role ? { role: updates.role } : {}),
+    ...(updates.username ? { username: updates.username } : {}),
+    ...(updates.platform ? { platform: updates.platform } : {}),
+    ...(updates.credentials ? { credentials: updates.credentials } : {}),
+    ...(updates.strategy !== undefined ? { strategy: updates.strategy as AccountStrategy | null } : {}),
+  };
+  if (Object.keys(changes).length === 0) {
+    res.status(400).json({ error: 'Nothing to update' });
+    return;
+  }
+
   const [updated] = await db
     .update(schema.accounts)
-    .set({
-      ...(updates.active !== undefined ? { active: updates.active } : {}),
-      ...(updates.role ? { role: updates.role } : {}),
-      ...(updates.username ? { username: updates.username } : {}),
-      ...(updates.platform ? { platform: updates.platform } : {}),
-      ...(updates.credentials ? { credentials: updates.credentials } : {}),
-      ...(updates.strategy !== undefined ? { strategy: updates.strategy as AccountStrategy | null } : {}),
-    })
+    .set(changes)
     .where(eq(schema.accounts.id, id))
     .returning();
 

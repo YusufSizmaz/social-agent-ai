@@ -11,6 +11,9 @@ import type { ContentRequest } from '../../types/index.js';
 import { asyncHandler, isUuid, parseBody, requireUuidParam } from '../middleware.js';
 import { generatePostSchema, platformSchema, postStatusSchema, updatePostSchema } from '../schemas.js';
 
+/** Statuses in which a post is not owned by the engine and may be edited from the dashboard */
+const EDITABLE_POST_STATUSES = ['review', 'scheduled', 'failed'] as const;
+
 export const postsRouter = Router();
 
 postsRouter.param('id', (req, res, next) => requireUuidParam(req, res, next));
@@ -74,23 +77,17 @@ postsRouter.post('/generate', asyncHandler(async (req, res) => {
     return;
   }
 
-  // Prefer an account on the target platform, fall back to any account in the project
-  let [account] = await db
+  // The post is published from this account, so it must be on the requested platform.
+  // Prefer an active account; an inactive one still works for manual publishing.
+  const [account] = await db
     .select({ id: schema.accounts.id })
     .from(schema.accounts)
     .where(and(eq(schema.accounts.projectId, body.projectId), eq(schema.accounts.platform, body.platform)))
+    .orderBy(desc(schema.accounts.active))
     .limit(1);
 
   if (!account) {
-    [account] = await db
-      .select({ id: schema.accounts.id })
-      .from(schema.accounts)
-      .where(eq(schema.accounts.projectId, body.projectId))
-      .limit(1);
-  }
-
-  if (!account) {
-    res.status(400).json({ error: 'This project has no accounts yet. Add an account first.' });
+    res.status(400).json({ error: `This project has no ${body.platform} account yet. Add one first.` });
     return;
   }
 
@@ -209,19 +206,34 @@ postsRouter.patch('/:id', asyncHandler(async (req, res) => {
   const body = parseBody(updatePostSchema, req, res);
   if (!body) return;
 
+  // Posts that are being published or already live can't be edited; status changes go through
+  // /publish (or the engine), so clients may only move a post between review and scheduled.
   const [updated] = await db
     .update(schema.posts)
     .set({
       ...(body.status !== undefined ? { status: body.status } : {}),
       ...(body.text !== undefined ? { text: body.text } : {}),
       ...(body.hashtags !== undefined ? { hashtags: body.hashtags } : {}),
+      ...(body.scheduledAt !== undefined ? { scheduledAt: body.scheduledAt } : {}),
       updatedAt: new Date(),
     })
-    .where(eq(schema.posts.id, id))
+    .where(and(
+      eq(schema.posts.id, id),
+      inArray(schema.posts.status, EDITABLE_POST_STATUSES),
+    ))
     .returning();
 
   if (!updated) {
-    res.status(404).json({ error: 'Post not found' });
+    const [existing] = await db
+      .select({ status: schema.posts.status })
+      .from(schema.posts)
+      .where(eq(schema.posts.id, id))
+      .limit(1);
+    if (!existing) {
+      res.status(404).json({ error: 'Post not found' });
+    } else {
+      res.status(409).json({ error: `A post with status "${existing.status}" cannot be edited` });
+    }
     return;
   }
 

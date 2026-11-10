@@ -4,6 +4,8 @@ import { z } from 'zod';
 // Treat empty strings (e.g. `FOO=` in .env or `${FOO:-}` in docker-compose) as unset
 const optionalString = () => z.preprocess((v) => (v === '' ? undefined : v), z.string().optional());
 const optionalUrl = () => z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional());
+const numberWithDefault = (schema: z.ZodNumber, defaultValue: number) =>
+  z.preprocess((v) => (v === '' || v === undefined ? defaultValue : v), z.coerce.number().pipe(schema));
 const booleanFlag = (defaultValue: boolean) =>
   z.preprocess(
     (v) => (v === '' || v === undefined ? String(defaultValue) : String(v).toLowerCase()),
@@ -52,9 +54,9 @@ export const envSchema = z.object({
 
   /** Score generated content with Gemini before publishing (one extra API call per post) */
   QUALITY_CHECK_ENABLED: booleanFlag(false),
-  QUALITY_MIN_SCORE: z.coerce.number().int().min(0).max(100).default(60),
+  QUALITY_MIN_SCORE: numberWithDefault(z.number().int().min(0).max(100), 60),
 
-  PORT: z.coerce.number().default(3000),
+  PORT: numberWithDefault(z.number().int().min(0).max(65535), 3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
 });
