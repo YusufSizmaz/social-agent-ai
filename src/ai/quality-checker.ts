@@ -3,6 +3,7 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { withRetry } from '../core/retry.js';
 import type { Platform } from '../config/constants.js';
+import { assertCompleteResponse, thinkingConfigFor } from './gemini.js';
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
@@ -33,7 +34,7 @@ Give the total score (0-100) and short feedback in the same language as the post
       config: {
         temperature: 0.3,
         maxOutputTokens: 512,
-        thinkingConfig: { thinkingBudget: 0 },
+        thinkingConfig: thinkingConfigFor(env.GEMINI_MODEL),
         responseMimeType: 'application/json',
         responseSchema: {
           type: 'object' as const,
@@ -45,6 +46,8 @@ Give the total score (0-100) and short feedback in the same language as the post
         },
       },
     });
+
+    assertCompleteResponse(response, 'checkQuality');
 
     const raw = response.text;
     if (!raw) {

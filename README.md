@@ -8,7 +8,7 @@ Automate your entire social media workflow — from AI content generation to mul
 
 [![CI](https://github.com/YusufSizmaz/social-agent-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufSizmaz/social-agent-ai/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/YusufSizmaz/social-agent-ai?style=social)](https://github.com/YusufSizmaz/social-agent-ai/stargazers)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Google Gemini](https://img.shields.io/badge/Google_Gemini-2.5_Flash-4285F4?logo=google&logoColor=white)](https://ai.google.dev/)
@@ -58,9 +58,18 @@ Whether you're a solo content creator, a digital agency managing multiple brands
 
 Each platform adapter handles API authentication, media uploads, rate limiting, and retry logic independently. Adapters are **auto-registered** based on which API credentials you provide — no configuration needed.
 
+The hourly and daily limits are enforced **per account**: when an account reaches its limit, publishing is postponed until it has room again instead of failing. A `429` from a platform is retried after the reset time the platform reports (15 minutes when it doesn't say).
+
+**Platform notes**
+
+- **TikTok** — apps that haven't passed TikTok's audit may only post privately; the adapter asks TikTok which privacy levels are allowed and falls back to private (with a warning in the log). It also waits until TikTok has finished processing the upload. TikTok access tokens expire after 24 hours and are not refreshed automatically yet.
+- **Instagram** — fetches media by URL, so `PUBLIC_BASE_URL` must point to this server. Generated media under `/public` is served without Basic Auth for that reason (file names are random).
+- **Image / story posts** — get an image generated with Imagen (requires a billing-enabled Gemini key), falling back to a Pexels stock photo when `PEXELS_API_KEY` is set.
+
 ### Autonomous Automation
 
 - **Cron-based scheduling** — each account gets its own posting schedule via cron expressions
+- **Review & scheduled publishing** — approve a post in the dashboard with an optional publish time; a once-a-minute scheduler publishes approved posts when they are due
 - **Content mix control** — configure ratios for original posts, reposts, and replies (e.g. 80/15/5)
 - **PostgreSQL job queue** — reliable background processing with `SELECT FOR UPDATE SKIP LOCKED` for concurrent-safe dequeuing, plus automatic recovery of jobs interrupted by a crash
 - **Plugin system** — poll external data sources, transform content, and publish automatically
@@ -83,7 +92,7 @@ A modern, single-page dashboard with dark theme and sidebar navigation:
 - **Projects** — Create and manage multiple brands/projects with logo uploads and independent configs
 - **Accounts** — Link social media accounts with platform credentials, assign roles (primary/secondary/backup), define content strategies
 - **Posts** — Browse, filter, generate AI content with tone/type selection, review quality/safety scores and errors, edit, and publish directly
-- **Twitter OAuth** — Built-in 3-legged authentication flow
+- **Twitter OAuth 1.0a** — Built-in 3-legged authentication flow
 - **Password protection** — HTTP Basic Auth for the dashboard and API via `DASHBOARD_PASSWORD`
 
 > The dashboard UI is currently in Turkish. Translations are a great first contribution!
@@ -161,12 +170,24 @@ docker compose up -d
 - Multi-stage build, running as a non-root user
 - PostgreSQL 16 (Alpine) with health checks, bound to localhost only
 - Automatic database migrations on startup
-- Chromium for WhatsApp Web.js session
+- Chromium for WhatsApp Web.js session (see [WhatsApp pairing](#whatsapp-pairing))
 - FFmpeg and fonts for the video pipeline
 - Persistent volumes for database, WhatsApp session, generated media and temp files
 - Container health check (`/api/health`) and graceful shutdown
 
 > Deploying on a server? Put the app behind HTTPS (Caddy, Nginx, Traefik) and see [SECURITY.md](SECURITY.md).
+
+The container runs in UTC unless you set `TZ` in `.env` (for example `TZ=Europe/Istanbul`). Account cron schedules, the 23:00 daily report and notification timestamps all use it.
+
+### WhatsApp pairing
+
+Notifications need a linked WhatsApp session. On the first start with `WHATSAPP_ADMIN_NUMBER` set, a QR code is printed in the log:
+
+```bash
+docker compose logs -f app   # or the terminal running `npm run dev`
+```
+
+Scan it from WhatsApp → **Settings → Linked devices → Link a device**. The session is stored in the `whatsapp_session` volume (`.wwebjs_auth/` outside Docker), so you only pair once.
 
 ---
 
@@ -177,7 +198,7 @@ docker compose up -d
 | Variable | Description |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `GEMINI_API_KEY` | Google Gemini API key — [get one free](https://aistudio.google.com/apikey) |
+| `GEMINI_API_KEY` | Google Gemini API key — [get one](https://aistudio.google.com/apikey). Text works on the free tier; Imagen image generation needs billing enabled (Pexels is used as a fallback) |
 
 ### Security
 
@@ -194,7 +215,7 @@ Add credentials for each platform you want to publish to. **Only configure what 
 | --- | --- |
 | `TWITTER_API_KEY`, `TWITTER_API_SECRET` | Twitter API v2 (app credentials) |
 | `TWITTER_ACCESS_TOKEN`, `TWITTER_ACCESS_SECRET` | Twitter API v2 (user credentials) |
-| `TWITTER_CALLBACK_URL` | OAuth2 callback URL (default: `http://localhost:3000/api/twitter/callback`) |
+| `TWITTER_CALLBACK_URL` | OAuth 1.0a callback URL (default: `http://localhost:3000/api/twitter/callback`) |
 | `INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_BUSINESS_ACCOUNT_ID` | Instagram Graph API |
 | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` | YouTube Data API v3 |
 | `TIKTOK_ACCESS_TOKEN` | TikTok Content Posting API |
@@ -211,7 +232,8 @@ Add credentials for each platform you want to publish to. **Only configure what 
 | `PEXELS_API_KEY` | — | Stock images for media pipeline — [get one free](https://www.pexels.com/api/) |
 | `WHATSAPP_ADMIN_NUMBER` | — | WhatsApp number for admin notifications (e.g. `905xxxxxxxxx`) |
 | `PLUGIN_DATABASE_URL` | — | External database for content source plugins |
-| `RUN_MIGRATIONS` | `false` (`true` in Docker) | Apply database migrations on startup |
+| `RUN_MIGRATIONS` | `false` (always `true` in Docker) | Apply database migrations on startup |
+| `TZ` | server timezone (UTC in Docker) | IANA timezone for cron schedules, the daily report and timestamps, e.g. `Europe/Istanbul` |
 | `PORT` | `3000` | Server port |
 | `NODE_ENV` | `development` | `development` / `production` / `test` |
 | `LOG_LEVEL` | `info` | `error` / `warn` / `info` / `debug` |
@@ -259,7 +281,7 @@ src/
 │   └── video-orchestrator.ts # Full video pipeline orchestrator
 ├── platforms/
 │   ├── base.ts               # Abstract base adapter (rate limiting + retry)
-│   ├── twitter/              # Twitter API v2 + OAuth2 flow
+│   ├── twitter/              # Twitter API v2 + OAuth 1.0a flow
 │   ├── instagram/            # Instagram Graph API
 │   ├── youtube/              # YouTube Data API v3
 │   └── tiktok/               # TikTok Content Posting API
@@ -279,7 +301,7 @@ src/
     │   ├── projects.ts       # Project CRUD + logo upload
     │   ├── accounts.ts       # Account CRUD with credential sanitization
     │   ├── posts.ts          # Post CRUD, AI generation, publishing
-    │   └── twitter-auth.ts   # Twitter OAuth2 flow
+    │   └── twitter-auth.ts   # Twitter OAuth 1.0a flow
     └── views/
         └── index.html        # Single-page dashboard application
 ```
@@ -389,6 +411,7 @@ User Prompt
 | Daily report | 23:00 daily | Sends WhatsApp summary with engagement stats |
 | Strategy optimization | Monday 02:00 | Analyzes 7-day data, auto-tunes tone/schedule/hashtags |
 | Stale job recovery | Every 10 min | Re-queues jobs interrupted by a crash or restart |
+| Scheduled posts | Every minute | Publishes approved posts whose publish time has come |
 | Account strategies | Per-account cron | Generates and publishes content per account config |
 
 ---

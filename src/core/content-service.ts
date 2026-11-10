@@ -1,17 +1,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { ContentType, type Platform } from '../config/constants.js';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { generateText } from '../ai/text-generator.js';
-import { createVideoContent, cleanupVideoFiles } from '../ai/video-orchestrator.js';
+import { createVideoContent, cleanupVideoFiles, generateBackgroundImage } from '../ai/video-orchestrator.js';
 import { checkQuality } from '../ai/quality-checker.js';
 import type { ContentRequest, GeneratedContent } from '../types/index.js';
 import { PUBLIC_DIR, ensureDir } from './media.js';
 import { fitToPlatform } from './safety-guard.js';
 
 const VIDEO_TYPES = new Set<string>([ContentType.VIDEO, ContentType.SHORT, ContentType.REEL]);
+const IMAGE_TYPES = new Set<string>([ContentType.IMAGE, ContentType.STORY]);
 const VIDEOS_DIR = path.join(PUBLIC_DIR, 'videos');
+const IMAGES_DIR = path.join(PUBLIC_DIR, 'images');
 
 export function isVideoContentType(contentType: string): boolean {
   return VIDEO_TYPES.has(contentType);
@@ -24,9 +27,9 @@ export interface CreatedContent extends GeneratedContent {
 }
 
 /**
- * Generates content for a request: text only, or the full video pipeline for video types.
- * Generated videos are moved to `public/videos` so the dashboard can play them and
- * platform adapters can upload them.
+ * Generates content for a request: text only, text plus an image for image/story types,
+ * or the full video pipeline for video types. Generated media is moved to `public/` so the
+ * dashboard can show it and platform adapters can upload it.
  */
 export async function createContent(request: ContentRequest): Promise<CreatedContent> {
   let content: GeneratedContent;
@@ -48,6 +51,9 @@ export async function createContent(request: ContentRequest): Promise<CreatedCon
     }
   } else {
     content = await generateText(request);
+    if (IMAGE_TYPES.has(request.contentType) && !request.mediaUrls?.length) {
+      content = { ...content, mediaUrls: [await createImage(request, content.text)] };
+    }
   }
 
   content = fitToPlatform(content, request.platform as Platform);
@@ -72,6 +78,21 @@ export async function createContent(request: ContentRequest): Promise<CreatedCon
     qualityScore,
     qualityFeedback,
   };
+}
+
+/** Generates an image for the post and moves it to `public/images`, returning its public URL */
+async function createImage(request: ContentRequest, text: string): Promise<string> {
+  // Stories are vertical; feed images are square (accepted by every platform)
+  const vertical = request.contentType === ContentType.STORY;
+  const tempPath = await generateBackgroundImage(request, text, 1080, vertical ? 1920 : 1080);
+  try {
+    ensureDir(IMAGES_DIR);
+    const filename = `${randomUUID()}${path.extname(tempPath) || '.png'}`;
+    fs.copyFileSync(tempPath, path.join(IMAGES_DIR, filename));
+    return `/public/images/${filename}`;
+  } finally {
+    try { fs.unlinkSync(tempPath); } catch { /* already gone */ }
+  }
 }
 
 /** True when quality checks are enabled and the content scored below the configured minimum */

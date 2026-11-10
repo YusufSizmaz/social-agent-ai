@@ -1,4 +1,5 @@
 import pkg from 'whatsapp-web.js';
+import qrcode from 'qrcode-terminal';
 const { Client, LocalAuth } = pkg;
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
@@ -14,7 +15,20 @@ export async function initWhatsApp(): Promise<void> {
 
   client = new Client({
     authStrategy: new LocalAuth(),
-    puppeteer: { headless: true, args: ['--no-sandbox'] },
+    puppeteer: { headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] },
+  });
+
+  // First run (or after logging out): the session has to be linked by scanning a QR code
+  client.on('qr', (qr: string) => {
+    logger.info(
+      'WhatsApp pairing required — scan the QR code below with WhatsApp > Settings > Linked devices. '
+      + 'In Docker, view it with `docker compose logs -f app`.',
+    );
+    qrcode.generate(qr, { small: true });
+  });
+
+  client.on('authenticated', () => {
+    logger.info('WhatsApp authenticated');
   });
 
   client.on('ready', () => {

@@ -20,6 +20,10 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # Give the engine time to finish the current job (it waits up to 60s) before Docker kills it
+    stop_grace_period: 75s
+    # Chromium (WhatsApp Web) crashes with Docker's default 64MB /dev/shm
+    shm_size: 1gb
     depends_on:
       db:
         condition: service_healthy
@@ -31,7 +35,10 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-bot}:${POSTGRES_PASSWORD:-bot}@db:5432/social_media_bot
       PORT: 3000
       NODE_ENV: production
-      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
+      # Always apply pending migrations so a fresh `docker compose up` gets a working database
+      RUN_MIGRATIONS: "true"
+      # IANA timezone for cron schedules, the daily report and notification timestamps
+      TZ: ${TZ:-UTC}
     volumes:
       - whatsapp_session:/app/.wwebjs_auth
       - temp_data:/app/temp

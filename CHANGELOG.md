@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+- Bumped `drizzle-orm` to 0.45 (SQL injection via improperly escaped identifiers) and `zod` to 4 (memory exhaustion on oversized collections); `npm audit fix` for critical `protobufjs` and `proxy-addr` advisories plus `multer`, `ws`, `axios`, `body-parser` and `form-data`.
+- Dashboard HTML escaping now covers quotes, closing an attribute-injection XSS through project names, usernames and AI-generated hashtags.
+- Password comparison no longer leaks the password length.
+- The Twitter OAuth flow can only be started for Twitter accounts (it used to overwrite any account's credentials).
+
+### Added
+- **Scheduled publishing** — approving a post takes an optional publish time; a once-a-minute scheduler publishes approved posts when they are due (approved posts previously stayed in `scheduled` forever).
+- **Per-account hourly/daily publishing limits** are now enforced (they were documented but never applied); posts over the limit are postponed instead of failing.
+- **Image and story posts get an image** (Imagen with Pexels fallback) — they used to be text-only, so Instagram image posts always failed.
+- **WhatsApp pairing** — the QR code is printed in the log; previously the session could never be linked.
+- `TZ` setting for cron schedules, the daily report and timestamps (Docker defaults to UTC).
+- Failed posts can be retried from the dashboard; post edits are blocked while a post is publishing or published.
+
+### Fixed
+- **Docker never ran migrations** on a fresh install because `.env.example` set `RUN_MIGRATIONS=false`; compose now always migrates.
+- **Instagram could not fetch generated media** when `DASHBOARD_PASSWORD` was set — `/public` is now served before Basic Auth.
+- Instagram image containers are now awaited before publishing ("Media ID is not available"); insights use `views` instead of the removed `impressions` metric; Graph API v23.0.
+- TikTok: checks the allowed privacy level (unaudited apps can only post privately), waits for processing and reports rejected uploads, stores the public post id, and sends `fields` as a query parameter so metrics work.
+- Twitter media uploads use the v2 endpoint (v1.1 `media/upload` is retired).
+- A failed metrics request no longer overwrites real numbers with zeros (Instagram, TikTok).
+- Publishing is no longer retried inside the adapter: a timeout after the platform accepted a post could create a duplicate tweet/video. The job queue retries with a backoff instead.
+- A single banned word now blocks a post (it took two before).
+- Interrupted publish jobs no longer leave posts stuck in `publishing`; a job only publishes posts that are still `publishing`, so pulling a post back to review stops it.
+- Strategy jobs re-check that the account, its strategy and its project are still active; deactivating a project now stops its accounts from posting.
+- The weekly optimizer keeps the minutes and weekdays of a cron schedule and only changes the hours.
+- Sibling accounts no longer reply to or repost each other's bot replies.
+- Rate-limit (`429`) errors are retried after the platform's reset time instead of burning all attempts within two minutes.
+- The engine retries startup when the database is not reachable yet, and stopped cron tasks no longer leak.
+- Gemini: truncated (`MAX_TOKENS`) or blocked responses fail with a clear message instead of retrying; thinking is disabled only for Flash models (Pro models rejected the quality check).
+- Background music no longer halves the voiceover volume; failed video renders no longer leave temp files behind.
+- Dashboard: project defaults are applied in the Generate form, the project filter covers engagement stats, removing a logo is saved, 0% content-mix values are kept, the Active toggle is respected on create, and moving an account between projects is no longer offered (it was silently ignored).
+- `/generate` no longer attaches a post to an account on another platform; empty account updates return 400; upload errors return 400/413 and duplicate names 409 instead of 500.
+- Empty `PORT` / `QUALITY_MIN_SCORE` values fall back to their defaults instead of 0.
+- Docker: WhatsApp cache directory is writable, larger `/dev/shm` for Chromium, graceful-shutdown period matches the engine's 60-second wait.
+
 ## [1.1.0] — 2026-09-13
 
 ### Added

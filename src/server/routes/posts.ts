@@ -259,7 +259,8 @@ postsRouter.delete('/:id', asyncHandler(async (req, res) => {
 
   // Remove generated media that only this post referenced
   for (const url of deleted.mediaUrls ?? []) {
-    const filePath = url.startsWith('/public/videos/') ? publicUrlToPath(url) : null;
+    const generated = url.startsWith('/public/videos/') || url.startsWith('/public/images/');
+    const filePath = generated ? publicUrlToPath(url) : null;
     if (filePath) {
       fs.promises.unlink(filePath).catch(() => {});
     }
