@@ -48,7 +48,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
-    "dotenv": "^18.0.9",
+    "dotenv": "^18.0.10",
     "drizzle-orm": "^0.45.4",
     "edge-tts-universal": "^1.4.0",
     "express": "^5.2.1",
@@ -61,7 +61,7 @@
     "postgres": "^3.4.9",
     "qrcode-terminal": "^0.12.0",
     "twitter-api-v2": "^1.29.1",
-    "whatsapp-web.js": "^1.34.7",
+    "whatsapp-web.js": "^1.34.8",
     "winston": "^3.17.0",
     "zod": "^4.6.7"
   },
